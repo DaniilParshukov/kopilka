@@ -1,1944 +1,1373 @@
 import { GameEngine } from './core/GameEngine.js';
 import { LocalStorageAdapter } from './core/LocalStorageAdapter.js';
 import { LocalPrices } from './prices/LocalPrices.js';
+import { lessons, lessonTabs, riskNames } from './lessons.js';
+import { loadNews } from './news.js';
+
+// ===== Настройки =====
+
+const GAME_ID = 'player';       // одно сохранение на браузер
+const PLAYER_KEY = 'copilka-player-name';
+const START_CASH = 10000;
+const SALARY_DAYS = [[10, 'Аванс'], [25, 'Зарплата']];
+const MONTHS_TOTAL = 12;
+const CHART_DAYS = 30;          // окно мини-графиков и изменения цены
+const QUANTITIES = ['1', '25', '50', 'MAX'];
+const CARD_STATES = ['active', 'locked', 'unlock'];
+
+// Шаблоны одиночной игры (экран «Выбери шаблон игры»)
+const TEMPLATES = {
+  training: { dayMs: 4000, openAll: false, lifeEvents: 'normal' },
+  advanced: { dayMs: 3000, openAll: true, lifeEvents: 'high' }
+};
+
+// Ряды игрового поля
+const LAYOUT = [
+  ['savings', 'bonds'],
+  ['funds', 'currency'],
+  ['stocks', 'gold']
+];
+
+// opensAt — игровой месяц, с которого категорию можно открыть.
+// slots — инструменты карточки; role связывает слот с тикером в game.tickers.
+const CATEGORIES = {
+  savings: { title: 'Накопительный счёт', lesson: 'savings', opensAt: 1 },
+  bonds: {
+    title: 'Облигации', lesson: 'ofz', opensAt: 2,
+    slots: [
+      { role: 'ofz', name: 'ОФЗ', unit: 'шт.' },
+      { role: 'corp', name: 'Корпоративная', unit: 'шт.', title: 'Корпоративные облигации', short: 'Корп. облигации' },
+      { role: 'vdo', name: 'ВДО', unit: 'шт.' }
+    ]
+  },
+  funds: {
+    title: 'ПИФы', lesson: 'funds', opensAt: 3,
+    slots: [
+      { role: 'fund1', name: 'ПИФ 1', unit: 'pai' },
+      { role: 'fund2', name: 'ПИФ 2', unit: 'pai' }
+    ]
+  },
+  stocks: {
+    title: 'Акции', lesson: 'stocks', opensAt: 4,
+    slots: [
+      { role: 'stock1', name: 'Акция 1', unit: 'шт.' },
+      { role: 'stock2', name: 'Акция 2', unit: 'шт.' },
+      { role: 'stock3', name: 'Акция 3', unit: 'шт.' }
+    ]
+  },
+  currency: {
+    title: 'Валюта', lesson: 'currency', opensAt: 5,
+    slots: [
+      { role: 'usd', name: 'Доллар / USD', unit: '$' },
+      { role: 'cny', name: 'Юань / CNY', unit: '¥', inactive: true } // данных по юаню нет — временно неактивен
+    ]
+  },
+  gold: {
+    title: 'Золото', lesson: 'gold', opensAt: 6,
+    slots: [{ role: 'gold', name: '1 лот = 1 г', unit: 'г', title: 'Золото' }]
+  }
+};
+
+const LESSON_CATEGORY = {
+  savings: 'savings', ofz: 'bonds', corp: 'bonds', vdo: 'bonds',
+  funds: 'funds', stocks: 'stocks', currency: 'currency', gold: 'gold'
+};
+
+// ===== Состояние =====
 
 const storage = new LocalStorageAdapter();
-globalThis.CopilkaStorage = LocalStorageAdapter;
-
-let gameEngine = new GameEngine(storage, null);
+const engine = new GameEngine(storage, null, { notify: toast, nameOf: tickerName });
 let prices = null;
-let gameInitializationPromise = null;
+let game = null;
 
-let gameData = {
-    portfolio: {
-        cash: 10000,
-        assets: {},
-        assetValues: {},
-        bankBalance: 0
-    },
-    date: getGameStartDate(2007),
+const ui = {
+  capitalMode: 'capital',
+  metricMode: {},       // ticker -> 'value' | 'profit'
+  qty: {},              // ticker -> '1' | '25' | '50' | 'MAX'
+  savingsForm: null,    // null | 'deposit' | 'withdraw'
+  lesson: null,         // { key, unlocking }
+  pause: new Set(),     // причины паузы: lesson, modal, hidden, console, finished
+  updaters: [],         // обновление значений карточек без перестройки DOM
+  news: [],             // новости игрового года (с псевдонимами), по возрастанию даты
+  newsShown: 0          // сколько новостей уже выведено в ленту
+};
+
+const $ = (id) => document.getElementById(id);
+
+// ===== Форматирование =====
+
+const NBSP = ' ';
+
+function group(value) {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+}
+
+function money(value, signed = false) {
+  const sign = value < 0 ? '−' : (signed && value > 0 ? '+' : '');
+  return `${sign}${group(Math.abs(Math.round(value)))}${NBSP}₽`;
+}
+
+function formatPrice(value) {
+  const rounded = Math.round(value * 100) / 100;
+  if (Number.isInteger(rounded)) return group(rounded);
+  const [int, frac] = rounded.toFixed(2).split('.');
+  return `${group(int)},${frac}`;
+}
+
+function percent(value, signed = true) {
+  const rounded = Math.round(value * 10) / 10;
+  const sign = rounded < 0 ? '−' : (signed && rounded > 0 ? '+' : '');
+  return `${sign}${Math.abs(rounded).toFixed(1).replace('.', ',')}%`;
+}
+
+// Дневное изменение цены: движения, которые округлились бы до 0,0%, показываем с двумя знаками; знак — по факту
+function changePercent(value) {
+  const digits = value !== 0 && Math.abs(value) < 0.05 ? 2 : 1;
+  const sign = value > 0 ? '+' : value < 0 ? '−' : '';
+  return `${sign}${Math.abs(value).toFixed(digits).replace('.', ',')}%`;
+}
+
+function trendClass(value) {
+  return value > 0 ? 'up' : value < 0 ? 'down' : 'flat';
+}
+
+function plural(n, [one, few, many]) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+function formatUnits(quantity, unit) {
+  const label = unit === 'pai' ? plural(quantity, ['пай', 'пая', 'паёв']) : unit;
+  return `${group(quantity)}${NBSP}${label}`;
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function button(className, text, onClick) {
+  const node = el('button', className, text);
+  node.type = 'button';
+  if (onClick) node.addEventListener('click', onClick);
+  return node;
+}
+
+// ===== Графики =====
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// viewBox 100×100 растягивается под контейнер, толщина линии не масштабируется.
+// Цвет — по изменению за последний день (up), по умолчанию по двум последним точкам;
+// 'neutral' — тёмный график без оценки (ставка банка в итогах).
+const CHART_TONES = {
+  up: ['#397E62', 'grad-up'],
+  down: ['#C65A4D', 'grad-down'],
+  neutral: ['#252925', 'grad-neutral']
+};
+
+function drawChart(svg, series, up = !(series[series.length - 1] < series[series.length - 2])) {
+  svg.innerHTML = '';
+  if (!series.length) return;
+  if (series.length === 1) series = [series[0], series[0]];
+
+  const max = Math.max(...series);
+  const min = Math.min(...series);
+  const range = max - min;
+  const line = series.map((v, i) => {
+    const x = (i / (series.length - 1)) * 100;
+    const y = range ? ((max + 0.12 * range - v) / (1.24 * range)) * 100 : 50;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(' ');
+
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+
+  const [stroke, gradient] = CHART_TONES[up === 'neutral' ? 'neutral' : up ? 'up' : 'down'];
+
+  const area = document.createElementNS(SVG_NS, 'polygon');
+  area.setAttribute('points', `0,100 ${line} 100,100`);
+  area.setAttribute('fill', `url(#${gradient})`);
+
+  const path = document.createElementNS(SVG_NS, 'polyline');
+  path.setAttribute('points', line);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', stroke);
+  path.setAttribute('stroke-width', 1.5);
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('vector-effect', 'non-scaling-stroke');
+
+  svg.append(area, path);
+}
+
+function chartElement() {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.classList.add('chart');
+  return svg;
+}
+
+// ===== Уведомления =====
+
+function toast(message, type = '') {
+  const box = $('toasts');
+  const node = el('div', `toast${type ? ` toast--${type}` : ''}`, message);
+  box.append(node);
+  while (box.children.length > 4) box.firstChild.remove();
+  setTimeout(() => node.remove(), 3500);
+}
+
+// ===== Цены и тикеры =====
+
+function tickerName(ticker) {
+  for (const category of Object.values(CATEGORIES)) {
+    for (const slot of category.slots || []) {
+      if (game?.tickers[slot.role] === ticker) return slot.name;
+    }
+  }
+  return ticker;
+}
+
+function currentPrice(ticker) {
+  return Number(prices.getPrice(ticker, game.date)) || 0;
+}
+
+function priceSeries(ticker) {
+  const history = prices.getHistory(ticker);
+  const today = Math.min(prices.getDay(game.date), history.length - 1);
+  return history.slice(Math.max(0, today - CHART_DAYS), today + 1).filter((v) => v > 0);
+}
+
+// Изменение цены к вчерашнему календарному дню, %. В выходные цена в данных повторяется — будет 0.
+function dailyChange(ticker) {
+  const history = prices.getHistory(ticker);
+  const today = Math.min(prices.getDay(game.date), history.length - 1);
+  const current = history[today];
+  const previous = history[today - 1];
+  return current > 0 && previous > 0 ? ((current - previous) / previous) * 100 : 0;
+}
+
+async function loadTickerRows() {
+  const response = await fetch('prices/tickers.csv');
+  if (!response.ok) throw new Error('Не удалось загрузить tickers.csv');
+  const byYear = {};
+  for (const line of (await response.text()).split(/\r?\n/)) {
+    const [year, name, ticker, , reliable] = line.split(',').map((s) => s.trim());
+    if (!/^\d{4}$/.test(year) || !ticker) continue;
+    (byYear[year] ||= []).push({ name, ticker, reliable: reliable === '+' });
+  }
+  return byYear;
+}
+
+function shuffle(items) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+// Строки года в tickers.csv: 1-я — ОФЗ, 2–5 — корпоративные (надёжные) и ВДО, дальше акции,
+// в конце банк, золото, доллар и два фонда.
+function pickTickers(rows) {
+  const has = (ticker) => prices.getHistory(ticker).length > 0;
+  const special = new Set(['BANK', 'GLDRUB', 'USD']);
+  const bonds = rows.slice(1, 5);
+  const funds = rows.filter((r) => r.name.startsWith('Фонд') && has(r.ticker));
+  const stocks = shuffle(rows.slice(5).filter((r) => !special.has(r.ticker) && !funds.includes(r) && has(r.ticker)));
+  const corp = shuffle(bonds.filter((r) => r.reliable))[0] || bonds[0];
+  const vdo = shuffle(bonds.filter((r) => !r.reliable))[0] || bonds[bonds.length - 1];
+
+  const picked = {
+    ofz: rows[0], corp, vdo,
+    fund1: funds[0], fund2: funds[1],
+    stock1: stocks[0], stock2: stocks[1], stock3: stocks[2],
+    usd: rows.find((r) => r.ticker === 'USD'),
+    gold: rows.find((r) => r.ticker === 'GLDRUB')
+  };
+
+  const tickers = { bank: 'BANK' };
+  const titles = {};
+  for (const [role, row] of Object.entries(picked)) {
+    if (!row) continue;
+    tickers[role] = row.ticker;
+    titles[role] = row.name;
+  }
+  return { tickers, titles };
+}
+
+// ===== Игра =====
+
+function monthIndex(date = game.date) {
+  return (date.getFullYear() - game.year) * 12 + date.getMonth() - 8;
+}
+
+function sumHistory(...types) {
+  return game.history.filter((h) => types.includes(h.type)).reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
+}
+
+// Внешние поступления: стартовый капитал, зарплаты, жизненные события
+function contributions() {
+  return START_CASH + sumHistory('SALARY', 'CASH_CHANGE');
+}
+
+function capital() {
+  return engine.getTotalValue(game.portfolio);
+}
+
+function updateCardAvailability() {
+  const month = monthIndex() + 1;
+  for (const [key, category] of Object.entries(CATEGORIES)) {
+    if (category.opensAt <= month && game.cards[key] === 'locked') game.cards[key] = 'unlock';
+  }
+}
+
+async function save() {
+  try {
+    await storage.saveGame(GAME_ID, game);
+  } catch (error) {
+    console.error('Не удалось сохранить игру:', error);
+  }
+}
+
+async function createGame(templateKey, player) {
+  const template = TEMPLATES[templateKey];
+  const byYear = await loadTickerRows();
+  const years = Object.keys(byYear);
+  const year = years[Math.floor(Math.random() * years.length)];
+
+  prices = await LocalPrices.create(year);
+  engine.prices = prices;
+
+  game = {
+    year: Number(year),
+    date: new Date(Number(year), 8, 1),
+    player,
+    mode: 'solo',
+    template: templateKey,
+    dayMs: template.dayMs,
+    lifeEvents: template.lifeEvents,
+    portfolio: { cash: START_CASH, bankBalance: 0, assets: {}, assetValues: {} },
     history: [],
     monthlyEvents: {},
-    pendingEvent: null
-};
-
-const gameClock = {
-    intervalMs: 3000,
-    timerId: null,
-    isPaused: true
-};
-
-
-/**
- * Устанавливает игровую дату.
- * Доступна из консоли как: setGameDate('2007-12-15')
- *                        setGameDate(new Date(2007, 11, 15))
- *                        setGameDate(2007, 12, 15)
- *
- * @param {string|Date|number} value - дата (строка, Date) или год (если переданы month/day)
- * @param {number} [month] - месяц 1-12
- * @param {number} [day] - день 1-31
- * @returns {Date} установленная дата
- */
-function setGameDate(value, month, day) {
-    if (!gameData) {
-        console.warn('gameData не инициализирован');
-        return null;
-    }
-    let newDate;
-
-    // Вариант 1: setGameDate(2007, 12, 15)
-    if (typeof value === 'number' && typeof month === 'number' && typeof day === 'number') {
-        newDate = new Date(value, month - 1, day);
-    }
-    // Вариант 2: setGameDate('2007-12-15') или setGameDate(new Date(...))
-    else {
-        newDate = value instanceof Date ? new Date(value.getTime()) : new Date(String(value));
-    }
-
-    if (Number.isNaN(newDate.getTime())) {
-        console.warn('Некорректная дата:', value, month, day);
-        return null;
-    }
-
-    gameData.date = newDate;
-
-    try {
-        updateDayBadge();
-        refreshVisiblePage();
-    } catch (e) {
-        console.warn('Не удалось обновить UI после смены даты:', e);
-    }
-    try {
-        const playerName = getCurrentGameId();
-        if (playerName && storage) {
-            void storage.saveGame(playerName, gameData);
-        }
-    } catch (e) {
-        console.warn('Не удалось сохранить игру после смены даты:', e);
-    }
-
-    console.log(`📅 Игровая дата установлена: ${newDate.toISOString().slice(0, 10)}`);
-    return newDate;
-}
-
-
-/**
- * Возвращает список доступных активов на текущий игровой месяц.
- * Отсчёт месяцев идёт с 1 сентября (начало игры).
- *
- * Месяц 1 (сентябрь)      – счёт
- * Месяц 2 (октябрь)       – счёт, облигации
- * Месяц 3 (ноябрь)        – счёт, облигации, ПИФы
- * Месяц 4 (декабрь)       – счёт, облигации, ПИФы, акции
- * Месяц 5 (январь)        – счёт, облигации, ПИФы, акции, валюта
- * Месяц 6 (февраль)       – счёт, облигации, ПИФы, акции, валюта, золото
- * Месяцы 6–12             – полный набор активов
- *
- * @param {Date} [date] - дата, для которой считаем доступность.
- *                        По умолчанию берётся gameData.date.
- * @returns {{ account: boolean, bonds: boolean, pif: boolean, stocks: boolean, currency: boolean, gold: boolean }}
- */
-function getAvailableAssets(date) {
-    const safeDate = normalizeDateValue(
-        date || (gameData && gameData.date)
-    );
-
-    const startYear = Number(gameData?.year);
-    const startDate = getGameStartDate(startYear);
-
-    // Сколько полных месяцев прошло с начала игры (1-й месяц = 0)
-    let monthIndex = (safeDate.getFullYear() - startDate.getFullYear()) * 12
-        + (safeDate.getMonth() - startDate.getMonth());
-
-    // Игровой месяц (1..12)
-    const gameMonth = monthIndex + 1;
-
-    return {
-        account:  monthIndex >= 0,
-        bonds:    monthIndex >= 1,
-        pif:      monthIndex >= 2,
-        stocks:   monthIndex >= 3,
-        currency: monthIndex >= 4,
-        gold:     monthIndex >= 5
-    };
-}
-
-
-let introductionIndex = 0;
-
-function renderIntroductionSlide(introductionIndex) {
-    const INTRODUCTION_SLIDES = [
-        {
-            text: 'Привет!\nЧтобы накопить небольшой капитал, у тебя есть один игровой год, который начинается с 1 сентября. Следить за временем игры ты можешь на таймере слева ВВЕРХУ.'
-        },
-        {
-            text: 'В игре:\n1) У тебя есть первоначальный капитал 10 000 рублей,\n2) Ты устроился на работу и можешь откладывать на накопление и инвестиции каждый месяц 10-го и 25-го числа.'
-        },
-        {
-            text: 'Ты можешь видеть общий капитал и свободные деньги на кнопках слева ВВЕРХУ.'
-        },
-        {
-            text: 'Свободные деньги можно вкладывать в банк на накопительный счет или инвестировать в финансовые инструменты, которые появляются в доступе постепенно.\nДля операций с финансовыми активами пройди по кнопке «ИНВЕСТИРОВАТЬ».\nМожно инвестировать в: облигации (ОФЗ, корпоративные, высокодоходные), ПИФы, акции, валюту и золото.'
-        },
-        {
-            text: 'Перед тем, как в доступе появится новый финансовый инструмент, нужно пройти обучение! Если захочешь вернуться и почитать про актив еще раз, нажми на кнопку «ОБУЧЕНИЕ» и найди нужную страницу.'
-        },
-        {
-            text: 'Если нужно почитать внимательно или немного подумать над ситуацией, жми на «Пауза»!'
-        },
-        {
-            text: 'Следи за новостями экономики и финансов!'
-        },
-        {
-            text: 'В игре тебя ждут неожиданные события!'
-        },
-        {
-            text: 'В конце игры ты узнаешь, в какие реальные активы ты инвестировал и сколько заработал или потерял денег на каждом из них и сколько удалось накопить за год!\nУспешных инвестиций!!'
-        }
-    ];
-    const root = document.getElementById('introduction');
-    if (!root) return;
-
-    const slide = INTRODUCTION_SLIDES[introductionIndex];
-    const titleNode = root.querySelector('.event-title');
-    const textNode = root.querySelector('#introText');
-    const nextButton = document.getElementById('introNext');
-    const dots = Array.from(root.querySelectorAll('.dot'));
-
-    if (titleNode) titleNode.textContent = slide.title;
-    if (textNode) textNode.textContent = slide.text;
-
-    dots.forEach((dot, index) => {
-        dot.classList.toggle('active', index === introductionIndex);
-    });
-
-    if (nextButton) {
-        nextButton.textContent = introductionIndex === INTRODUCTION_SLIDES.length - 1 ? 'Начать игру' : 'Дальше';
-    }
-}
-
-function setupIntroductionFlow() {
-    const root = document.getElementById('introduction');
-    if (!root) return;
-
-    const nextButton = document.getElementById('introNext');
-    const skipButton = document.getElementById('introSkip');
-
-    if (nextButton && !nextButton.dataset.bound) {
-        nextButton.dataset.bound = 'true';
-        nextButton.addEventListener('click', () => {
-            if (introductionIndex < 8) {
-                introductionIndex += 1;
-                renderIntroductionSlide(introductionIndex);
-                return;
-            }
-
-            introductionIndex = 0;
-            if (typeof window.showPage === 'function') {
-                window.showPage('teaching');
-            }
-            renderIntroductionSlide(introductionIndex);
-        });
-    }
-
-    if (skipButton && !skipButton.dataset.bound) {
-        skipButton.dataset.bound = 'true';
-        skipButton.addEventListener('click', () => {
-            introductionIndex = 0;
-            if (typeof window.showPage === 'function') {
-                window.showPage('teaching');
-            }
-            renderIntroductionSlide(introductionIndex);
-        });
-    }
-
-    document.addEventListener('keydown', (event) => {
-        if (event.code === 'Space' && event.key === ' ' && document.querySelector('.page-section.active')?.id === 'introduction') {
-            event.preventDefault();
-            if (introductionIndex < 8) {
-                introductionIndex += 1;
-                renderIntroductionSlide(introductionIndex);
-                return;
-            }
-
-            introductionIndex = 0;
-            if (typeof window.showPage === 'function') {
-                window.showPage('teaching');
-            }
-            renderIntroductionSlide(introductionIndex);
-        }
-    });
-
-    renderIntroductionSlide(introductionIndex);
-}
-
-function getGameStartDate(year = 2007) {
-    const safeYear = Number(year);
-    return new Date(safeYear, 8, 1);
-}
-
-async function resumeGameAfterContinue() {
-    try {
-        await initializeGame();
-    } catch (error) {
-        console.error('Не удалось инициализировать игру:', error);
-    } finally {
-        setPauseState(true);
-        if (typeof window.showPage === 'function') {
-            if (gameData.date && gameData.date.getFullYear() === Number(gameData.year) && gameData.date.getMonth() === 8 && gameData.date.getDate() === 1) {
-                window.showPage('introduction');
-            } else {
-                window.showPage('portfolio');
-            }
-        }
-    }
-}
-
-function updateDayBadge() {
-    const badge = document.querySelector('.day-badge');
-    if (!badge || !gameData) return;
-    const safeDate = normalizeDateValue(gameData.date, Number(gameData.year));
-    const year = Number(safeDate.getFullYear());
-    const month = String(safeDate.getMonth() + 1).padStart(2, '0');
-    const day = String(safeDate.getDate()).padStart(2, '0');
-    const startDate = getGameStartDate(Number(gameData.year));
-    const dayIndex = Math.max(0, Math.round((safeDate - startDate) / 86400000));
-    badge.textContent = `${year}-${month}-${day} [${dayIndex}]`;
-}
-
-function refreshVisiblePage() {
-    try {
-        updateDayBadge();
-
-        if (document.querySelector('.portfolio-table') && typeof globalThis.refreshPortfolio === 'function') {
-            void globalThis.refreshPortfolio();
-        }
-
-        if (document.querySelector('.deal-panel') && typeof globalThis.refreshTradeView === 'function') {
-            globalThis.refreshTradeView();
-        }
-    } catch (error) {
-        console.error('Ошибка обновления страницы после изменения дня:', error);
-    }
-}
-
-function setPauseState(isPaused) {
-    gameClock.isPaused = Boolean(isPaused);
-    const pauseButtons = document.querySelectorAll('[data-game-pause-toggle]');
-    pauseButtons.forEach((button) => {
-        button.textContent = gameClock.isPaused ? 'Продолжить' : 'Пауза';
-        button.setAttribute('aria-pressed', String(gameClock.isPaused));
-    });
-}
-
-function togglePauseState() {
-    setPauseState(!gameClock.isPaused);
-}
-
-async function advanceGameDay() {
-    if (!gameData || gameClock.isPaused) return;
-
-    const playerName = getCurrentGameId();
-    gameData.date = normalizeDateValue(gameData.date, Number(gameData.year) || 2007);
-    gameEngine.nextDay(gameData);
-
-    await storage.saveGame(playerName, gameData);
-    refreshVisiblePage();
-
-    try {
-        // если наступил первый день следующего года — показываем экран результатов
-        const safeDate = normalizeDateValue(gameData.date, Number(gameData.year));
-        const startYear = Number(gameData.year);
-        if (safeDate.getFullYear() === startYear + 1 && safeDate.getMonth() === 8 && safeDate.getDate() === 1) {
-            try {
-                showYearResults();
-                setPauseState(true);
-            } catch (e) {
-                console.error('Ошибка при показе годовых результатов:', e);
-            }
-        }
-    } catch (e) {
-        console.error('advanceGameDay: проверка окончания года не удалась', e);
-    }
-
-    // Если появилось ожидающее событие — покажем экран события
-    try {
-        if (gameData && gameData.pendingEvent) {
-            showPendingEvent();
-        }
-    } catch (e) {
-        console.error('Не удалось показать событие после хода:', e);
-    }
-
-    const safeDate = normalizeDateValue(gameData.date);
-
-    const startYear = Number(gameData?.year);
-    const startDate = getGameStartDate(startYear);
-
-    let monthIndex = (safeDate.getFullYear() - startDate.getFullYear()) * 12 + (safeDate.getMonth() - startDate.getMonth());
-
-    if (monthIndex <= 5 && gameData.date.getDate() === 1) {
-        monthIndex = monthIndex >= 2 ? monthIndex + 2 : monthIndex;
-        window.showPage('teaching', { index: monthIndex });
-    }
-}
-
-function startGameClock() {
-    if (gameClock.timerId) return;
-
-    gameClock.timerId = globalThis.setInterval(() => {
-        if (!gameClock.isPaused) {
-            void advanceGameDay();
-        }
-    }, gameClock.intervalMs);
-}
-
-function stopGameClock() {
-    if (gameClock.timerId) {
-        globalThis.clearInterval(gameClock.timerId);
-        gameClock.timerId = null;
-    }
-}
-
-function createDefaultSelectedTickers() {
-    return {
-        bonds: [],
-        stocks: [],
-        fundTickers: [],
-        usdTicker: 'USD',
-        goldTicker: 'GLDRUB',
-        bankTicker: 'BANK'
-    };
-}
-
-function getCurrentGameId() {
-    try {
-      return localStorage.getItem('copilka-player-name');
-    } catch (error) {
-      throw new Error('Не удалось загрузить имя игрока из localStorage: ' + error.message);
-    }
-}
-
-function normalizeDateValue(value, fallbackYear = 2007) {
-    return value instanceof Date ? new Date(value) : new Date(String(value));
-}
-
-function cloneGameData(data) {
-    if (data === null || data === undefined) return data;
-    if (data instanceof Date) return new Date(data.getTime());
-    if (Array.isArray(data)) return data.map((item) => cloneGameData(item));
-    if (typeof data !== 'object') return data;
-
-    const seen = new WeakMap();
-    const walk = (value) => {
-        if (value === null || value === undefined) return value;
-        if (value instanceof Date) return new Date(value.getTime());
-        if (Array.isArray(value)) {
-            const list = value.map((item) => walk(item));
-            seen.set(value, list);
-            return list;
-        }
-        if (typeof value === 'object') {
-            if (seen.has(value)) return seen.get(value);
-            const copy = {};
-            seen.set(value, copy);
-            Object.entries(value).forEach(([key, item]) => {
-                copy[key] = walk(item);
-            });
-            return copy;
-        }
-        return value;
-    };
-
-    return walk(data);
-}
-
-function normalizeLoadedGameState(data) {
-    function requireNumber(v, field) {
-        const n = Number(v);
-        if (!Number.isFinite(n)) throw new Error(`Invalid number: ${field}`);
-        return n;
-    }
-
-    function requirePositiveNumber(v, field) {
-        const n = requireNumber(v, field);
-        if (n <= 0) throw new Error(`Expected positive number: ${field}`);
-        return n;
-    }
-
-    function mapValues(obj, fn) {
-        const out = {};
-        for (const [k, v] of Object.entries(obj ?? {})) out[k] = fn(v, k);
-        return out;
-    }
-    if (!data || typeof data !== 'object') {
-        throw new Error('Invalid save data');
-    }
-
-    const year = Number(data.year);
-    const date = normalizeDateValue(data.date, year);
-    if (!date || Number.isNaN(date.getTime())) {
-        throw new Error('Invalid date in save data');
-    }
-
-    const src = data.portfolio ?? {};
-    const portfolio = {
-        cash: requireNumber(src.cash, 'portfolio.cash'),
-        bankBalance: requireNumber(src.bankBalance, 'portfolio.bankBalance'),
-        assets: mapValues(src.assets, requirePositiveNumber),
-        assetValues: mapValues(src.assetValues, v => ({
-            quantity: requireNumber(v?.quantity, 'assetValues.quantity'),
-            price: requireNumber(v?.price, 'assetValues.price'),
-            value: requireNumber(v?.value, 'assetValues.value'),
-        })),
-    };
-
-    return {
-        ...data,
-        portfolio,
-        date,
-        year: String(year),
-        history: Array.isArray(data.histories) ? data.histories : (data.history ?? []),
-    };
-}
-
-// Compute portfolio snapshot at given date (using current prices when available)
-function computePortfolioSnapshot(date) {
-    const safeDate = normalizeDateValue(date || gameData.date, Number(gameData.year) || 2007);
-    const portfolio = cloneGameData(gameData.portfolio || {});
-    const cash = Number(portfolio.cash) || 0;
-    const bank = Number(portfolio.bankBalance) || 0;
-    const assets = {};
-    let assetsTotal = 0;
-
-    const tickers = Object.keys(portfolio.assets || {});
-    for (const ticker of tickers) {
-        const quantity = Number(portfolio.assets[ticker] || 0) || 0;
-        let price = 0;
-        try {
-            price = (prices && typeof prices.getPrice === 'function') ? Number(prices.getPrice(ticker, safeDate) || 0) : 0;
-        } catch (e) {
-            price = Number(portfolio.assetValues?.[ticker]?.price || 0);
-        }
-        const value = Number(quantity * price) || 0;
-        assets[ticker] = { quantity, price, value };
-        assetsTotal += value;
-    }
-
-    const total = cash + bank + assetsTotal;
-    return { date: safeDate, cash, bank, assets, assetsTotal, total };
-}
-
-function showYearResults() {
-    // compute initial and final snapshots
-    const finalSnapshot = computePortfolioSnapshot(gameData.date);
-    const initialSnapshot = gameData._initialSnapshot || computePortfolioSnapshot(getGameStartDate(Number(gameData.year) || 2007));
-
-    const selected = gameData.selectedTickers || createDefaultSelectedTickers();
-    const categories = {
-        account: finalSnapshot.cash + finalSnapshot.bank,
-        bonds: 0,
-        corporate: 0,
-        vdo: 0,
-        stocks: 0,
-        currency: 0,
-        pif: 0,
-        gold: 0,
-        other: 0
-    };
-
-    const usdTicker = selected.usdTicker || 'USD';
-    const goldTicker = selected.goldTicker || 'GLDRUB';
-    const bondTickers = Array.isArray(selected.bonds) ? selected.bonds : [];
-    const stockTickers = Array.isArray(selected.stocks) ? selected.stocks : [];
-    const fundTickers = Array.isArray(selected.fundTickers) ? selected.fundTickers : [];
-
-    for (const [ticker, info] of Object.entries(finalSnapshot.assets || {})) {
-        const value = Number(info.value) || 0;
-        if (bondTickers.includes(ticker)) {
-            categories.bonds += value;
-        } else if (stockTickers.includes(ticker)) {
-            categories.stocks += value;
-        } else if (fundTickers.includes(ticker)) {
-            categories.pif += value;
-        } else if (ticker === usdTicker) {
-            categories.currency += value;
-        } else if (ticker === goldTicker) {
-            categories.gold += value;
-        } else {
-            categories.other += value;
-        }
-    }
-
-    const total = Number(finalSnapshot.total) || 0;
-    const startTotal = Number(initialSnapshot.total) || 0;
-    const growth = total - startTotal;
-    const growthPct = startTotal > 0 ? (growth / startTotal) * 100 : 0;
-
-    // render capital card
-    const resultsRoot = document.getElementById('results');
-    if (!resultsRoot) return;
-
-    const amt = resultsRoot.querySelector('.results-capital-card .amount');
-    const growthEl = resultsRoot.querySelector('.results-capital-card .growth');
-    const pctEl = resultsRoot.querySelector('.results-capital-card .percent');
-    const startEl = resultsRoot.querySelector('.results-capital-card .start');
-    const growthAmountEl = resultsRoot.querySelector('.results-capital-card .growth-amount');
-
-    const fmt = (v) => `${Math.round(Number(v || 0)).toLocaleString('ru-RU')} ₽`;
-    const fmtPct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1).replace('.', ',')}%`;
-
-    if (amt) amt.textContent = fmt(total);
-    if (growthEl) growthEl.textContent = `${growth >= 0 ? '+' : ''}${Math.round(growth).toLocaleString('ru-RU')} ₽`;
-    if (pctEl) pctEl.textContent = fmtPct(growthPct);
-    if (startEl) startEl.textContent = `Ты начал(а) с ${fmt(startTotal)}`;
-    if (growthAmountEl) growthAmountEl.textContent = `${Math.round(growth).toLocaleString('ru-RU')} ₽`;
-
-    // stats-grid values
-    const statValues = resultsRoot.querySelectorAll('.stats-grid .stat-card .value');
-    if (statValues && statValues.length >= 4) {
-        statValues[0].textContent = fmt(startTotal);
-        statValues[1].textContent = fmt(total);
-        statValues[2].textContent = `${growth >= 0 ? '+' : ''}${Math.round(growth).toLocaleString('ru-RU')} ₽`;
-        statValues[3].textContent = fmtPct(growthPct).replace('+', '+');
-    }
-
-    // structure legend — find legend items and populate by order
-    const legendItems = resultsRoot.querySelectorAll('.structure-legend .legend-item');
-    const order = ['account', 'bonds', 'corporate', 'vdo', 'stocks', 'currency', 'pif', 'gold'];
-    order.forEach((key, idx) => {
-        const node = legendItems[idx];
-        if (!node) return;
-        const valueNode = node.querySelector('.value');
-        const nameNode = node.querySelector('.name');
-        const val = Number(categories[key] || 0);
-        const pct = total > 0 ? Math.round((val / total) * 100) : 0;
-        if (valueNode) valueNode.textContent = `${pct}%`;
-        if (nameNode) {
-            // leave existing name
-        }
-    });
-
-    // update bar chart visualization to reflect real portfolio structure (widths that sum to 100%)
-    try {
-        const bars = Array.from(resultsRoot.querySelectorAll('.bars .bar'));
-        // compute raw percentages
-        const raw = order.map((key) => (total > 0 ? (Number(categories[key] || 0) / total) * 100 : 0));
-        // rounded percentages and adjust rounding error by adding remainder to the largest slice
-        const rounded = raw.map((r) => Math.round(r));
-        const sumRounded = rounded.reduce((s, v) => s + v, 0);
-        const diff = 100 - sumRounded;
-        if (diff !== 0) {
-            // find index of max raw value
-            let maxIdx = 0;
-            for (let i = 1; i < raw.length; i++) {
-                if ((raw[i] || 0) > (raw[maxIdx] || 0)) maxIdx = i;
-            }
-            rounded[maxIdx] = (rounded[maxIdx] || 0) + diff;
-        }
-
-        const barInfos = [];
-        order.forEach((key, idx) => {
-            const pct = Math.max(0, rounded[idx] || 0);
-            const bar = bars[idx];
-            if (!bar) return;
-            // Ensure inline width is honored (disable flex growth)
-            bar.style.flex = '0 0 auto';
-            // Set width so bars grow horizontally and collectively occupy 100%
-            bar.style.width = `${pct}%`;
-            bar.style.minWidth = '0';
-            bar.style.height = '';
-            bar.style.transition = 'width 0.3s';
-            // Provide accessible label and tooltip
-            bar.setAttribute('role', 'img');
-            bar.setAttribute('aria-label', `${pct}% — ${Math.round(Number(categories[key] || 0)).toLocaleString('ru-RU')} ₽`);
-            bar.title = `${pct}% — ${Math.round(Number(categories[key] || 0)).toLocaleString('ru-RU')} ₽`;
-
-            // label inside bar if wide enough
-            let label = bar.querySelector('.bar-label');
-            if (pct >= 6) {
-                if (!label) {
-                    label = document.createElement('span');
-                    label.className = 'bar-label';
-                    bar.appendChild(label);
-                }
-                label.textContent = `${pct}%`;
-                label.style.display = '';
-            } else if (label) {
-                label.style.display = 'none';
-            }
-
-            // reset radius — we'll apply correct rounding after loop
-            bar.style.borderRadius = '0';
-
-            barInfos.push({ node: bar, key, pct, value: Number(categories[key] || 0) });
-        });
-
-        // apply rounded corners: first visible bar gets left rounding, last visible — right rounding
-        try {
-            const visible = barInfos.filter((b) => (b.pct || 0) > 0);
-            if (visible.length === 1) {
-                const only = visible[0].node;
-                only.style.borderRadius = '8px';
-            } else if (visible.length > 1) {
-                const first = visible[0].node;
-                const last = visible[visible.length - 1].node;
-                if (first) first.style.borderRadius = '4px 0 0 4px';
-                if (last) last.style.borderRadius = '0 4px 4px 0';
-            } else {
-                // no visible bars: restore default first/last child rounding
-                const first = bars[0];
-                const last = bars[bars.length - 1];
-                if (first) first.style.borderRadius = '4px 0 0 4px';
-                if (last) last.style.borderRadius = '0 4px 4px 0';
-            }
-        } catch (e) {
-            // non-fatal
-        }
-
-        // sort legend items by pct descending so legend order matches visual importance
-        try {
-            const legend = resultsRoot.querySelector('.structure-legend');
-            if (legend) {
-                const items = Array.from(legend.querySelectorAll('.legend-item'));
-                const itemInfos = items.map((node, idx) => ({ node, key: order[idx], pct: Math.max(0, rounded[idx] || 0) }));
-                itemInfos.sort((a, b) => b.pct - a.pct);
-                // re-append in sorted order
-                itemInfos.forEach((it) => legend.appendChild(it.node));
-            }
-        } catch (e) {
-            // non-fatal
-        }
-    } catch (e) {
-        console.warn('Не удалось обновить бар-чарт структуры активов:', e);
-    }
-
-    // earnings — show profit per category
-    const earningRows = resultsRoot.querySelectorAll('.earning-grid .earning-row');
-    earningRows.forEach((row) => {
-        const name = row.querySelector('.name')?.textContent?.trim();
-        const amountNode = row.querySelector('.amount');
-        if (!name || !amountNode) return;
-        let profit = 0;
-        // map name to category key
-        const map = {
-            'Накопительный счёт': 'account',
-            'ОФЗ': 'bonds',
-            'Корп. облигации': 'corporate',
-            'ВДО': 'vdo',
-            'Акции': 'stocks',
-            'Иностранная валюта': 'currency',
-            'ПИФ': 'pif',
-            'Золото': 'gold'
-        };
-        const key = map[name] || null;
-        if (key) {
-            // compute initial and final for that category
-            const initialVal = computeCategoryValue(initialSnapshot, key, selected);
-            const finalVal = computeCategoryValue(finalSnapshot, key, selected);
-            profit = finalVal - initialVal;
-        }
-        amountNode.textContent = `${profit >= 0 ? '+' : ''}${Math.round(profit).toLocaleString('ru-RU')} ₽`;
-        amountNode.classList.toggle('positive', profit >= 0);
-        amountNode.classList.toggle('negative', profit < 0);
-    });
-
-    // finally, open results page
-    try {
-        if (typeof window.showPage === 'function') window.showPage('results');
-    } catch (e) {
-        console.error('Не удалось открыть страницу результатов', e);
-    }
-}
-
-function computeCategoryValue(snapshot, key, selected) {
-    if (!snapshot) return 0;
-    if (key === 'account') return Number(snapshot.cash || 0) + Number(snapshot.bank || 0);
-    const usdTicker = selected?.usdTicker || 'USD';
-    const goldTicker = selected?.goldTicker || 'GLDRUB';
-    const bondTickers = Array.isArray(selected?.bonds) ? selected.bonds : [];
-    const stockTickers = Array.isArray(selected?.stocks) ? selected.stocks : [];
-    const fundTickers = Array.isArray(selected?.fundTickers) ? selected.fundTickers : [];
-
-    let sum = 0;
-    for (const [ticker, info] of Object.entries(snapshot.assets || {})) {
-        const val = Number(info.value) || 0;
-        if (key === 'bonds' && bondTickers.includes(ticker)) sum += val;
-        else if (key === 'stocks' && stockTickers.includes(ticker)) sum += val;
-        else if (key === 'pif' && fundTickers.includes(ticker)) sum += val;
-        else if (key === 'currency' && ticker === usdTicker) sum += val;
-        else if (key === 'gold' && ticker === goldTicker) sum += val;
-        else if (key === 'other') sum += val;
-    }
-    return sum;
-}
-
-function shuffleArray(items) {
-    const copy = [...items];
-    for (let i = copy.length - 1; i > 0; i -= 1) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [copy[i], copy[j]] = [copy[j], copy[i]];
-    }
-    return copy;
-}
-
-async function loadTickersCsv() {
-    const url = 'prices/tickers.csv';
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Не удалось загрузить tickers.csv');
-
-    const text = await res.text();
-    const lines = text.split(/\r?\n/).map((line) => line.trim());
-    const map = {};
-
-    for (const line of lines) {
-        if (!line) continue;
-
-        const parts = line.split(',');
-        if (parts.length < 3) continue;
-
-        const year = parts[0].trim();
-        const name = parts[1].trim();
-        const ticker = parts[2].trim();
-
-        if (!/^\d{4}$/.test(year)) continue;
-        if (!map[year]) map[year] = [];
-
-        map[year].push({ Name: name, Ticker: ticker });
-    }
-
-    return map;
-}
-
-function buildSelectedTickers(rows) {
-    const trailingSpecialRows = rows.slice(-5);
-    const stockPool = rows.slice(5, rows.length - 5);
-
-    const bankTicker = trailingSpecialRows.find((row) => /BANK/i.test(row.Ticker) || /BANK/i.test(row.Name))?.Ticker || 'BANK';
-    const usdTicker = trailingSpecialRows.find((row) => /USD/i.test(row.Ticker) || /USD/i.test(row.Name))?.Ticker || 'USD';
-
-    const fundTickers = trailingSpecialRows
-        .filter((row) => {
-            const ticker = row.Ticker || '';
-            const name = row.Name || '';
-            return !/BANK|USD|GLDRUB/i.test(ticker)
-                && !/BANK|USD|GLDRUB/i.test(name)
-                && (ticker.length > 8 || /FUND|ФОНД|EQ|JR|RU000/i.test(name) || /FUND|ФОНД|EQ|JR|RU000/i.test(ticker));
-        })
-        .map((row) => row.Ticker)
-        .slice(0, 2);
-
-    const stockCandidates = stockPool.map((row) => row.Ticker).filter(Boolean);
-    const stockCount = Math.min(3, stockCandidates.length);
-    const stocks = shuffleArray(stockCandidates).slice(0, stockCount);
-
-    const bondCandidates = rows.slice(0, 5).map((row) => row.Ticker).filter(Boolean);
-    const first = bondCandidates[0];
-    const secondOrThird = bondCandidates[Math.random() < 0.5 ? 1 : 2];
-    const fourthOrFifth = bondCandidates[Math.random() < 0.5 ? 3 : 4];
-
-    const goldTicker = trailingSpecialRows.find((row) => /GLDRUB/i.test(row.Ticker) || /GLDRUB/i.test(row.Name))?.Ticker;
-
-    return {
-        bonds: [first, secondOrThird, fourthOrFifth].filter(Boolean),
-        stocks,
-        usdTicker,
-        goldTicker,
-        fundTickers,
-        bankTicker
-    };
-}
-
-async function ensureTickerSelection() {
-    try {
-        const csvMap = await loadTickersCsv();
-        const years = Object.keys(csvMap);
-        if (!years.length) {
-            throw new Error('Нет доступных данных в tickers.csv');
-        }
-
-        const randomYear = years[Math.floor(Math.random() * years.length)];
-        const rows = csvMap[randomYear] || [];
-        const selectedTickers = buildSelectedTickers(rows);
-
-        gameData.year = randomYear;
-        gameData.date = getGameStartDate(randomYear);
-        gameData.selectedTickers = selectedTickers;
-
-        prices = await LocalPrices.create(randomYear);
-        gameEngine.prices = prices;
-
-        return selectedTickers;
-    } catch (err) {
-        throw new Error(`Не удалось загрузить tickers.csv: ${err}`);
-    }
+    pendingEvent: null,
+    ...pickTickers(byYear[year]),
+    cards: Object.fromEntries(Object.keys(CATEGORIES).map((key) => [key, template.openAll ? 'active' : 'locked'])),
+    finished: false
+  };
+  updateCardAvailability();
+  await save();
 }
 
 async function loadGame() {
-    const playerName = getCurrentGameId();
-    const saved = await storage.loadGame(playerName);
-    if (saved) {
-        gameData = normalizeLoadedGameState(saved);
-        if (gameData.year) {
-            prices = await LocalPrices.create(String(gameData.year));
-            gameEngine.prices = prices;
-        }
-    }
+  const saved = await storage.loadGame(GAME_ID);
+  if (!saved?.tickers || !saved.year || !saved.cards) return false;
+  game = saved;
+  prices = await LocalPrices.create(String(game.year));
+  engine.prices = prices;
+  return true;
 }
 
-async function initializeGame() {
-    gameData = {
-        portfolio: {
-            cash: 10000,
-            assets: {},
-            assetValues: {},
-            bankBalance: 0
-        },
-        date: getGameStartDate(2007),
-        history: [],
-        monthlyEvents: {},
-        pendingEvent: null
-    };
-    await loadGame();
+async function advanceDay() {
+  if (!game || game.finished || ui.pause.size) return;
 
-    if (!gameData.selectedTickers || !gameData.year) {
-        await ensureTickerSelection();
-    }
+  const previousMonth = monthIndex();
+  engine.nextDay(game);
 
-    if (!prices) {
-        const year = gameData?.year;
-        prices = await LocalPrices.create(String(year));
-        gameEngine.prices = prices;
-    }
+  if (monthIndex() >= MONTHS_TOTAL) {
+    finishGame();
+  } else if (monthIndex() !== previousMonth) {
+    updateCardAvailability();
+    renderField();
+  }
 
-    startGameClock();
-    
-    // Ensure we have a snapshot of the starting portfolio to calculate yearly profit
-    try {
-        const safeYear = Number(gameData.year) || 2007;
-        const startDate = getGameStartDate(safeYear);
-        if (!gameData._initialSnapshot) {
-            gameData._initialSnapshot = computePortfolioSnapshot(startDate);
-        }
-    } catch (e) {
-        console.warn('Не удалось создать начальный снимок портфеля:', e);
-    }
+  renderMonth();
+  refresh();
+  renderNews();
+  if (game.pendingEvent) showLifeEvent(game.pendingEvent);
+  await save();
 }
 
-// Start a fresh game flow triggered by "Играть ещё" button.
+// ===== Новости =====
+
+function isoDate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+// Псевдонимы только для акций: новости в prices/news.csv касаются компаний-эмитентов акций
+async function initNews() {
+  const aliases = {};
+  for (const slot of CATEGORIES.stocks.slots) {
+    const ticker = game.tickers[slot.role];
+    if (ticker) aliases[ticker] = slot.name;
+  }
+  try {
+    ui.news = await loadNews(game.year, aliases);
+  } catch (error) {
+    console.error('Не удалось загрузить новости:', error);
+    ui.news = [];
+  }
+  ui.newsShown = -1;
+  renderNews();
+}
+
+// Лента: уже наступившие новости, свежие сверху. «Событие 03.2» — игровой месяц и номер новости в нём.
+function renderNews() {
+  if (!game) return;
+  const today = isoDate(game.date);
+  const visible = ui.news.filter((n) => n.date <= today);
+  if (visible.length === ui.newsShown) return;
+  ui.newsShown = visible.length;
+
+  const perMonth = {};
+  const items = visible.map((item) => {
+    const [y, m, d] = item.date.split('-').map(Number);
+    const month = Math.min(MONTHS_TOTAL, Math.max(1, monthIndex(new Date(y, m - 1, d)) + 1));
+    perMonth[month] = (perMonth[month] || 0) + 1;
+    return { ...item, order: `Событие ${String(month).padStart(2, '0')}.${perMonth[month]}` };
+  });
+
+  const box = $('news');
+  box.innerHTML = '';
+  for (const item of items.reverse()) {
+    const article = el('article', 'news__item');
+    article.append(el('span', 'm-caption', item.order), el('h3', 't-label', item.title), el('p', '', item.text));
+    box.append(article);
+  }
+  box.scrollTop = 0;
+}
+
+function setPaused(reason, paused) {
+  if (paused) ui.pause.add(reason);
+  else ui.pause.delete(reason);
+  document.body.classList.toggle('is-paused', ui.pause.size > 0);
+}
+
+// ===== Шапка =====
+
+function renderHeader() {
+  $('free-money').textContent = money(game.portfolio.cash);
+  $('free-money').classList.toggle('down', Math.round(game.portfolio.cash) < 0);
+
+  const total = capital();
+  const isCapital = ui.capitalMode === 'capital';
+  const value = $('capital-value');
+  const profit = total - contributions();
+  value.textContent = isCapital ? money(total) : money(profit, true);
+  value.className = `m-metric nowrap ${isCapital ? '' : trendClass(Math.round(profit))}`;
+  for (const btn of $('capital-switch').children) {
+    btn.classList.toggle('is-active', btn.dataset.mode === ui.capitalMode);
+  }
+}
+
+// Сегменты дней пересоздаются раз в день: анимация заполнения текущего дня
+// запускается заново, а её окончание (animationend) двигает игру на следующий день.
+function renderMonth() {
+  // После окончания игры дата уже 1 сентября следующего года — показываем заполненный последний месяц
+  const date = game.finished ? new Date(game.year + 1, 7, 31) : game.date;
+  const index = monthIndex(date);
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = game.finished ? daysInMonth + 1 : date.getDate();
+
+  $('month-title').textContent = `Месяц ${index + 1} / ${MONTHS_TOTAL}`;
+
+  const days = $('month-days');
+  days.innerHTML = '';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const state = d < today ? ' is-done' : d === today ? ' is-current' : '';
+    days.append(el('span', `month__day${state}`));
+  }
+
+  const paydays = $('month-paydays');
+  paydays.innerHTML = '';
+  for (const [day, label] of SALARY_DAYS) {
+    const mark = el('span', 'payday', label);
+    mark.style.left = `${((day - 0.5) / daysInMonth) * 100}%`;
+    paydays.append(mark);
+  }
+}
+
+// ===== Карточки =====
+
+function refresh() {
+  renderHeader();
+  ui.updaters.forEach((update) => update());
+}
+
+function renderField() {
+  ui.updaters = [];
+  const field = $('field');
+  field.innerHTML = '';
+  for (const row of LAYOUT) {
+    const rowBox = el('div', 'field__row');
+    row.forEach((key) => rowBox.append(renderCategory(key)));
+    field.append(rowBox);
+  }
+}
+
+function renderCategory(key) {
+  const category = CATEGORIES[key];
+  const box = el('section', 'category raised');
+  box.style.flex = `${category.slots ? category.slots.length : 1} 1 0`;
+  box.dataset.card = key;
+
+  const state = game.cards[key];
+  if (state !== 'active') return renderClosedCategory(key, box, state);
+
+  const title = el('div', 'category__title t-label');
+  const help = button('help m-control', '?', () => openLesson(category.lesson));
+  help.title = 'Обучение';
+  title.append(el('span', '', category.title), help);
+
+  const body = el('div', 'category__body');
+  if (key === 'savings') {
+    body.append(renderSavings());
+  } else {
+    category.slots.forEach((slot, i) => {
+      if (i > 0) body.append(el('span', 'vsep'));
+      body.append(renderInstrument(slot));
+    });
+  }
+
+  box.append(title, body);
+  return box;
+}
+
+const LOCK_ICON = '<svg viewBox="0 0 56 56" fill="none" stroke="#8E9788" stroke-width="2.5" stroke-linecap="round"><rect x="13" y="24" width="30" height="22" rx="4"/><path d="M19 24v-6a9 9 0 0 1 18 0v6M28 33v6"/></svg>';
+const UNLOCK_ICON = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="4" y="9" width="12" height="8" rx="1.5"/><path d="M7 9V6a3 3 0 0 1 5.8-1.1"/></svg>';
+
+function renderClosedCategory(key, box, state) {
+  const category = CATEGORIES[key];
+  const isLocked = state === 'locked';
+  box.className = `category category--closed category--${state}`;
+
+  const title = el('div', 'category__title');
+  title.append(el('span', isLocked ? 't-label' : 't-heading', category.title));
+
+  const access = el('div', 'access');
+  if (isLocked) {
+    access.innerHTML = LOCK_ICON;
+  } else {
+    const btn = button('unlock-btn t-label', undefined, () => openLesson(category.lesson, key));
+    btn.innerHTML = `${UNLOCK_ICON}<span>Открыть</span>`;
+    access.append(btn);
+  }
+
+  box.append(title, access);
+  return box;
+}
+
+// --- Накопительный счёт ---
+
+function bankNetDeposits() {
+  return sumHistory('BANK_OPEN') - sumHistory('BANK_WITHDRAW');
+}
+
+function renderSavings() {
+  return ui.savingsForm ? renderSavingsForm(ui.savingsForm) : renderSavingsDefault();
+}
+
+function renderSavingsDefault() {
+  const box = el('div', 'instrument');
+
+  const rateBox = el('div');
+  const rate = el('div', 'm-metric');
+  rateBox.append(el('span', 't-caption flat', 'Ставка'), rate);
+
+  const terms = el('div', 'terms');
+  const chart = chartElement();
+  terms.append(chart);
+
+  const result = el('div', 'savings-result nowrap');
+  const balance = el('span', 'm-body');
+  const income = el('span', 'm-body');
+  result.append(balance, income);
+
+  const actions = el('div', 'actions');
+  const withdraw = button('btn t-label', 'Снять', () => openSavingsForm('withdraw'));
+  const deposit = button('btn btn--dark t-label', 'Пополнить', () => openSavingsForm('deposit'));
+  actions.append(withdraw, deposit);
+
+  box.append(rateBox, terms, result, actions);
+
+  ui.updaters.push(() => {
+    const bankBalance = game.portfolio.bankBalance;
+    const earned = bankBalance - bankNetDeposits();
+    rate.textContent = percent(currentPrice(game.tickers.bank), false);
+    // График — ставка банка за последние 30 дней; цвет — по изменению ставки за день
+    drawChart(chart, priceSeries(game.tickers.bank));
+    balance.textContent = money(bankBalance);
+    income.textContent = money(earned, true);
+    income.className = `m-body ${trendClass(Math.round(earned))}`;
+    withdraw.disabled = bankBalance <= 0;
+    deposit.disabled = game.portfolio.cash <= 0;
+  });
+  return box;
+}
+
+function renderSavingsForm(mode) {
+  const isDeposit = mode === 'deposit';
+  const box = el('div', 'instrument');
+
+  const head = el('div', 'savings-head');
+  const balance = el('span', 'm-metric');
+  head.append(el('span', 'm-control', 'Счёт'), balance);
+
+  const form = el('div', 'savings-form');
+  const input = el('input', 'amount-input m-body');
+  input.inputMode = 'decimal';
+  input.placeholder = '0';
+
+  const available = () => (isDeposit ? game.portfolio.cash : game.portfolio.bankBalance);
+  const confirm = () => submitSavings(mode, input.value);
+
+  const row = el('div', 'savings-form__row');
+  row.append(
+    button('t-label', 'Отмена', closeSavingsForm),
+    button('m-control', 'MAX', () => {
+      input.value = formatPrice(Math.floor(available() * 100) / 100).replaceAll(NBSP, ' ');
+      input.focus();
+    })
+  );
+
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') confirm();
+    if (event.key === 'Escape') closeSavingsForm();
+  });
+
+  form.append(
+    el('span', 't-caption savings-form__caption', isDeposit ? 'Пополнение счёта' : 'Снятие со счёта'),
+    row,
+    input,
+    button('btn-confirm-small t-label', 'Подтвердить', confirm)
+  );
+
+  box.append(head, el('div', 'savings-spacer'), form);
+  ui.updaters.push(() => { balance.textContent = money(game.portfolio.bankBalance); });
+  requestAnimationFrame(() => input.focus());
+  return box;
+}
+
+function openSavingsForm(mode) {
+  ui.savingsForm = mode;
+  renderField();
+  refresh();
+}
+
+function closeSavingsForm() {
+  ui.savingsForm = null;
+  renderField();
+  refresh();
+}
+
+function submitSavings(mode, raw) {
+  const amount = Number(String(raw).replace(/[\s ]/g, '').replace(',', '.'));
+  if (!(amount > 0)) {
+    toast('Введите сумму больше нуля', 'error');
+    return;
+  }
+  try {
+    if (mode === 'deposit') engine.openBank(game, amount);
+    else engine.withdrawBank(game, amount);
+  } catch (error) {
+    toast(error.message, 'error');
+    return;
+  }
+  toast(`${mode === 'deposit' ? 'Счёт пополнен' : 'Со счёта снято'}: ${money(amount)}`, 'success');
+  closeSavingsForm();
+  void save();
+}
+
+// --- Инструмент ---
+
+function renderInstrument(slot) {
+  const ticker = game.tickers[slot.role];
+  const isInactive = slot.inactive || !ticker;
+  const box = el('div', `instrument${isInactive ? ' is-inactive' : ''}`);
+
+  const head = el('div');
+  const quote = el('div', 'quote');
+  const price = el('span', 'm-price', '—');
+  const change = el('span', 'm-control flat');
+  const defaultBadge = el('span', 'default-badge t-label', 'Дефолт');
+  defaultBadge.hidden = true;
+  quote.append(price, defaultBadge, change);
+  head.append(el('div', 't-label', slot.name), quote);
+
+  const terms = el('div', 'terms');
+  const chart = chartElement();
+  terms.append(chart);
+
+  const ownership = el('div', 'ownership');
+  const holdings = el('div');
+  const units = el('span', 'm-control', formatUnits(0, slot.unit));
+  holdings.append(el('span', 't-caption', 'У вас'), units);
+
+  const metric = el('div', 'metric');
+  const metricValue = el('span', 'm-body', money(0));
+  const metricSwitch = button('metric-switch', undefined, () => {
+    ui.metricMode[ticker] = ui.metricMode[ticker] === 'profit' ? 'value' : 'profit';
+    refresh();
+  });
+  metricSwitch.innerHTML = '<img src="assets/swap.svg" alt="">';
+  metric.append(metricValue, metricSwitch);
+  ownership.append(holdings, metric);
+
+  const trade = el('div', 'trade');
+  const qty = el('div', 'qty m-caption');
+  for (const amount of QUANTITIES) {
+    qty.append(button('', amount, () => {
+      ui.qty[ticker] = amount;
+      refresh();
+    }));
+  }
+
+  const actions = el('div', 'actions');
+  const sell = button('btn t-label', 'Продать', () => tradeAsset(slot, 'sell'));
+  const buy = button('btn btn--dark t-label', 'Купить', () => tradeAsset(slot, 'buy'));
+  actions.append(sell, buy);
+  trade.append(qty, actions);
+
+  box.append(head, terms, ownership, trade);
+
+  if (isInactive) {
+    for (const btn of box.querySelectorAll('button')) btn.disabled = true;
+    return box;
+  }
+
+  ui.updaters.push(() => {
+    const current = currentPrice(ticker);
+    const delta = dailyChange(ticker);
+
+    // Полный дефолт отключает инструмент: плашка вместо цены, вместо стоимости — итоговый результат
+    const defaulted = engine.isDefaulted(ticker, game.date);
+    box.classList.toggle('is-defaulted', defaulted);
+    price.hidden = defaulted;
+    defaultBadge.hidden = !defaulted;
+    if (defaulted) {
+      const entry = game.portfolio.assetValues[ticker];
+      const loss = entry ? entry.value + entry.withdrawn - entry.invested : 0;
+      change.textContent = '';
+      drawChart(chart, priceSeries(ticker), false);
+      units.textContent = formatUnits(0, slot.unit);
+      metricValue.textContent = money(loss, true);
+      metricValue.className = `m-body ${trendClass(Math.round(loss))}`;
+      for (const btn of box.querySelectorAll('button')) btn.disabled = true;
+      return;
+    }
+
+    price.textContent = current > 0 ? `${formatPrice(current)}${NBSP}₽` : '—';
+    change.textContent = current > 0 ? changePercent(delta) : '';
+    change.className = `m-control ${trendClass(delta)}`;
+    drawChart(chart, priceSeries(ticker), delta >= 0);
+
+    const held = Number(game.portfolio.assets[ticker]) || 0;
+    const entry = game.portfolio.assetValues[ticker];
+    const value = held * current;
+    const profit = entry ? entry.value + entry.withdrawn - entry.invested : 0;
+    const showProfit = ui.metricMode[ticker] === 'profit';
+
+    units.textContent = formatUnits(held, slot.unit);
+    metricValue.textContent = showProfit ? money(profit, true) : money(value);
+    metricValue.className = `m-body ${showProfit ? trendClass(Math.round(profit)) : ''}`;
+    metricSwitch.dataset.hint = showProfit ? 'Показать стоимость' : 'Показать результат';
+
+    const selected = ui.qty[ticker] || QUANTITIES[0];
+    for (const btn of qty.children) btn.classList.toggle('is-active', btn.textContent === selected);
+
+    sell.disabled = held <= 0;
+    buy.disabled = !(current > 0) || game.portfolio.cash < current;
+  });
+  return box;
+}
+
+function tradeAsset(slot, action) {
+  const ticker = game.tickers[slot.role];
+  const current = currentPrice(ticker);
+  const held = Number(game.portfolio.assets[ticker]) || 0;
+  const selected = ui.qty[ticker] || QUANTITIES[0];
+  const isBuy = action === 'buy';
+
+  let amount = Number(selected);
+  if (selected === 'MAX') amount = isBuy ? Math.floor(game.portfolio.cash / current) : held;
+
+  if (isBuy && (amount <= 0 || amount * current > game.portfolio.cash)) {
+    toast(`Недостаточно средств: нужно ${money(Math.max(amount, 1) * current)}`, 'error');
+    return;
+  }
+  if (!isBuy && amount > held) {
+    toast(`У вас только ${formatUnits(held, slot.unit)}`, 'error');
+    return;
+  }
+
+  try {
+    if (isBuy) engine.buyAsset(game, ticker, amount);
+    else engine.sellAsset(game, ticker, amount);
+  } catch (error) {
+    toast(error.message, 'error');
+    return;
+  }
+
+  toast(`${isBuy ? 'Куплено' : 'Продано'}: ${slot.name}, ${formatUnits(amount, slot.unit)}`, 'success');
+  refresh();
+  void save();
+}
+
+// ===== Обучение =====
+
+function renderBlock(block) {
+  const box = el('section', `section${block.example ? ' section--example' : ''}`);
+  box.append(el('h2', 't-heading', block.h));
+  if (block.sub) box.append(el('h3', 't-label', block.sub));
+  for (const paragraph of block.text || []) box.append(el('p', '', paragraph));
+  for (const [label, text] of block.points || []) {
+    const point = el('div', 'point');
+    point.append(el('span', 't-label', label), el('p', '', text));
+    box.append(point);
+  }
+  return box;
+}
+
+// unlocking — ключ категории, которая откроется после прохождения обучения
+function openLesson(key, unlocking = ui.lesson?.unlocking ?? null) {
+  const lesson = lessons[key];
+  ui.lesson = { key, unlocking };
+
+  $('learn-title').textContent = lesson.title;
+  const risk = $('learn-risk');
+  risk.textContent = riskNames[lesson.risk];
+  risk.className = `risk t-label risk--${lesson.risk}`;
+
+  const tabs = $('learn-tabs');
+  tabs.innerHTML = '';
+  tabs.hidden = !lesson.tabs;
+  for (const [tabKey, label] of lessonTabs[lesson.tabs] || []) {
+    tabs.append(button(tabKey === key ? 'is-active' : '', label, () => openLesson(tabKey)));
+  }
+
+  const columns = el('div', 'learn__columns');
+  for (const side of ['left', 'right']) {
+    if (side === 'right') columns.append(el('span', 'vsep'));
+    const column = el('div', 'learn__column');
+    lesson[side].forEach((block) => column.append(renderBlock(block)));
+    columns.append(column);
+  }
+  const body = $('learn-body');
+  body.innerHTML = '';
+  body.scrollTop = 0;
+  body.append(columns);
+
+  $('learn').hidden = false;
+  document.body.classList.add('is-learning');
+  setPaused('lesson', true);
+}
+
+function closeLesson() {
+  if (!ui.lesson) return;
+  const { unlocking } = ui.lesson;
+  ui.lesson = null;
+
+  $('learn').hidden = true;
+  document.body.classList.remove('is-learning');
+  setPaused('lesson', false);
+
+  if (unlocking && game.cards[unlocking] === 'unlock') {
+    game.cards[unlocking] = 'active';
+    renderField();
+    refresh();
+    void save();
+  }
+}
+
+// ===== Модальное окно (Life Event / Modal) =====
+
+let onModalConfirm = null;
+
+function showModal({ type, typeClass, icon, title, amount, amountClass, text, buttonText, onConfirm }) {
+  $('modal-type').textContent = type;
+  $('modal-type').className = `t-label ${typeClass}`;
+  $('modal-icon').textContent = icon;
+  $('modal-title').textContent = title;
+  $('modal-amount').textContent = amount;
+  $('modal-amount').className = `life-event__amount ${amountClass}`;
+  $('modal-text').textContent = text;
+  $('modal-confirm').textContent = buttonText;
+  onModalConfirm = onConfirm;
+  $('modal').hidden = false;
+  setPaused('modal', true);
+}
+
+function closeModal() {
+  $('modal').hidden = true;
+  const callback = onModalConfirm;
+  onModalConfirm = null;
+  setPaused('modal', false);
+  callback?.();
+}
+
+function showLifeEvent(event) {
+  const isIncome = event.amount > 0;
+  showModal({
+    type: isIncome ? 'Неожиданный доход' : 'Непредвиденный расход',
+    typeClass: isIncome ? 'up' : 'down',
+    icon: event.icon,
+    title: event.title,
+    amount: money(event.amount, true),
+    amountClass: isIncome ? 'up' : 'down',
+    text: event.text,
+    buttonText: event.buttonText || 'Понятно!',
+    onConfirm: () => {
+      engine.changeCash(game, event.amount);
+      game.pendingEvent = null;
+      refresh();
+      void save();
+    }
+  });
+}
+
+function finishGame() {
+  game.finished = true;
+  setPaused('finished', true);
+  renderFinal();
+  document.body.classList.add('is-final');
+  $('final').scrollTop = 0;
+}
+
+// ===== Итоги года =====
+
+// Цвета групп в полосе «Структура активов»: счёт, облигации, ПИФы, акции, валюта, золото, свободные деньги
+const GROUP_COLORS = ['#252925', '#3A4238', '#8E9788', '#AEB8A8', '#DDE4D7', '#D9F477', '#EDF1E7'];
+
+// Строки отчёта в порядке легенды: стоимость на конец игры и денежный результат за весь период
+function finalRows() {
+  const { portfolio } = game;
+  const rows = [{
+    role: 'savings',
+    title: 'Накопительный счёт',
+    short: 'Накопительный',
+    group: 0,
+    value: portfolio.bankBalance,
+    invested: sumHistory('BANK_OPEN'),
+    result: portfolio.bankBalance - bankNetDeposits()
+  }];
+
+  const groups = { bonds: 1, funds: 2, stocks: 3, currency: 4, gold: 5 };
+  for (const [key, group] of Object.entries(groups)) {
+    for (const slot of CATEGORIES[key].slots) {
+      const entry = portfolio.assetValues[game.tickers[slot.role]];
+      rows.push({
+        role: slot.role,
+        title: slot.title || slot.name,
+        short: slot.short || slot.title || slot.name,
+        group,
+        value: entry?.value || 0,
+        invested: entry?.invested || 0,
+        result: entry ? entry.value + entry.withdrawn - entry.invested : 0
+      });
+    }
+  }
+
+  rows.push({ role: 'cash', title: 'Свободные деньги', group: 6, value: portfolio.cash, result: null });
+  return rows;
+}
+
+function renderFinal() {
+  const total = capital();
+  const profit = total - contributions();
+  const events = sumHistory('CASH_CHANGE');
+
+  $('final-capital').textContent = money(total);
+  $('final-profit').textContent = money(profit, true);
+  $('final-profit').className = `summary__profit ${trendClass(Math.round(profit))}`;
+  $('final-wages').textContent = money(START_CASH + sumHistory('SALARY'));
+  $('final-events').textContent = money(events, true);
+  $('final-events').className = `m-metric ${Math.round(events) < 0 ? 'down' : ''}`;
+  $('final-rank').classList.toggle('is-hidden', game.mode !== 'multi');
+
+  const rows = finalRows();
+  renderComposition(rows, total);
+  renderLegend(rows, total);
+  renderResults(rows);
+  renderHistory();
+}
+
+function renderComposition(rows, total) {
+  const box = $('final-composition');
+  box.innerHTML = '';
+  const byGroup = GROUP_COLORS.map((_, group) => rows.filter((r) => r.group === group).reduce((s, r) => s + r.value, 0));
+  byGroup.forEach((value, group) => {
+    if (value <= 0 || total <= 0) return;
+    const segment = el('span');
+    segment.style.flex = `${value / total} 1 0`;
+    segment.style.background = GROUP_COLORS[group];
+    segment.title = `${money(value)} · ${percent((value / total) * 100, false)}`;
+    box.append(segment);
+  });
+}
+
+// Легенда в три колонки, порядок по строкам: i-й элемент уходит в колонку i % 3
+function renderLegend(rows, total) {
+  const box = $('final-legend');
+  box.innerHTML = '';
+  const columns = [0, 1, 2].map(() => el('div', 'legend__column'));
+  rows.forEach((row, i) => {
+    const item = el('div', 'legend__item');
+    const marker = el('span', 'marker');
+    marker.style.background = GROUP_COLORS[row.group];
+    item.append(
+      marker,
+      el('span', '', row.title),
+      el('span', `legend__value m-control ${Math.round(row.value) < 0 ? 'down' : ''}`, money(row.value)),
+      el('span', 'legend__share m-caption', percent(total > 0 ? (row.value / total) * 100 : 0, false))
+    );
+    columns[i % 3].append(item);
+  });
+  columns.forEach((column, i) => {
+    if (i > 0) box.append(el('span', 'vsep'));
+    box.append(column);
+  });
+}
+
+// Два рейтинга инструментов: в рублях и в % от вложенного
+function renderResults(rows) {
+  const used = rows.filter((r) => r.result !== null && Math.round(r.result) !== 0);
+  renderResultColumns('final-gains', 'final-losses', used.map((r) => ({ ...r, score: r.result })), (v) => money(v, true));
+
+  const withPercent = used
+    .map((r) => ({ ...r, score: r.invested > 0 ? (r.result / r.invested) * 100 : null }))
+    .filter((r) => r.score !== null);
+  renderResultColumns('final-gains-pct', 'final-losses-pct', withPercent, (v) => percent(v));
+}
+
+// Прибыльные — по убыванию, убыточные — по убыванию модуля; ширина бара — доля от максимального модуля.
+// Выбросы обрезаем: шкала не больше 3 медиан, бары длиннее — во всю ширину (значение пишется как есть).
+function resultScale(list) {
+  const values = list.map((r) => Math.abs(r.score)).sort((a, b) => a - b);
+  if (!values.length) return 1;
+  const median = values[Math.floor(values.length / 2)];
+  return Math.max(Number.EPSILON, Math.min(values[values.length - 1], median * 3));
+}
+
+function renderResultColumns(gainsId, lossesId, list, format) {
+  const scale = resultScale(list);
+  const fill = (id, items) => {
+    const box = $(id);
+    box.innerHTML = '';
+    for (const row of items) {
+      const line = el('div', 'result');
+      const track = el('div', 'result__track');
+      const bar = el('span', 'result__bar');
+      bar.style.width = `${Math.min(1, Math.abs(row.score) / scale) * 100}%`;
+      bar.style.background = row.score > 0 ? 'var(--up)' : 'var(--down)';
+      track.append(bar);
+      line.append(
+        el('span', 'result__name', row.short),
+        track,
+        el('span', `result__value m-body ${trendClass(row.score)}`, format(row.score))
+      );
+      box.append(line);
+    }
+  };
+  fill(gainsId, list.filter((r) => r.score > 0).sort((a, b) => b.score - a.score));
+  fill(lossesId, list.filter((r) => r.score < 0).sort((a, b) => a.score - b.score));
+}
+
+// Реальные инструменты партии: название, тикер, изменение за игровой год и график по неделям
+function renderHistory() {
+  $('final-period').textContent = `Исторический период — ${game.year} год`;
+  const grid = $('final-history');
+  grid.innerHTML = '';
+
+  const start = prices.getDay(new Date(game.year, 8, 1));
+  const end = prices.getDay(new Date(game.year + 1, 7, 31));
+  const weekly = (history) => history.slice(start, end + 1).filter((v, i, list) => v > 0 && (i % 7 === 0 || i === list.length - 1));
+
+  const cards = [{ role: 'bank', title: 'Накопительный счёт', ticker: game.tickers.bank, isRate: true }];
+  for (const key of ['bonds', 'funds', 'stocks', 'currency', 'gold']) {
+    for (const slot of CATEGORIES[key].slots) {
+      const ticker = game.tickers[slot.role];
+      if (!ticker || slot.inactive) continue;
+      cards.push({ role: slot.role, title: game.titles[slot.role] || ticker, slotName: slot.title || slot.name, ticker });
+    }
+  }
+
+  for (const card of cards) {
+    const series = weekly(prices.getHistory(card.ticker));
+    const first = series[0] || 0;
+    const last = series[series.length - 1] || 0;
+
+    const box = el('article', 'history-card raised');
+    const head = el('div', 'history-card__head');
+    const identity = el('div', 'history-card__identity');
+    identity.append(
+      el('h3', 't-heading', card.title),
+      el('span', 'm-caption', card.slotName ? `${card.slotName} · ${card.ticker}` : card.ticker)
+    );
+
+    const metric = el('div', 'history-card__metric');
+    if (card.isRate) {
+      const delta = last - first;
+      metric.append(
+        el('span', 'm-metric', `${delta > 0 ? '+' : delta < 0 ? '−' : ''}${Math.abs(delta).toFixed(1).replace('.', ',')}${NBSP}п.п.`),
+        el('span', 't-caption', 'ставка'),
+        el('span', 't-caption', `${percent(first, false)} → ${percent(last, false)}`)
+      );
+    } else {
+      const change = first > 0 ? ((last - first) / first) * 100 : 0;
+      metric.append(
+        el('span', `m-metric ${trendClass(Math.round(change * 10))}`, first > 0 ? percent(change) : '—'),
+        el('span', 't-caption', 'цена за период')
+      );
+    }
+    head.append(identity, metric);
+
+    const chart = chartElement();
+    drawChart(chart, series, card.isRate ? 'neutral' : last >= first);
+    box.append(head, chart);
+    grid.append(box);
+  }
+}
+
+// ===== Запуск =====
+
+function renderAll() {
+  document.documentElement.style.setProperty('--day-ms', `${game.dayMs || TEMPLATES.training.dayMs}ms`);
+  const player = game.player || 'Игрок';
+  $('player-name').textContent = player;
+  $('rating').classList.toggle('is-hidden', game.mode !== 'multi');
+  $('player-initial').textContent = player[0].toUpperCase();
+  renderField();
+  renderMonth();
+  refresh();
+  void initNews();
+}
+
+// После окончания игры — новая партия с выбора режима (имя уже известно)
+async function restart() {
+  closeLessonSilently();
+  await storage.deleteGame(GAME_ID);
+  ui.savingsForm = null;
+  setPaused('finished', false);
+  document.body.classList.remove('is-final');
+  game = null;
+  $('field').innerHTML = '';
+  $('month-days').innerHTML = '';
+  $('news').innerHTML = '';
+  ui.news = [];
+  showEntry(playerName() ? 'mode' : 'start');
+}
+
+// ===== Вступительные экраны =====
+
+const ENTRY_PAGES_WITH_NAME = ['mode', 'solo', 'multi'];
+let selectedTemplate = 'training';
+
+function playerName() {
+  try {
+    return localStorage.getItem(PLAYER_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function showEntry(page) {
+  document.body.classList.add('is-entry');
+  setPaused('entry', true);
+  for (const node of document.querySelectorAll('.entry__page')) {
+    node.classList.toggle('is-active', node.dataset.page === page);
+  }
+  $('entry-meta').textContent = ENTRY_PAGES_WITH_NAME.includes(page) && playerName() ? playerName() : 'Финансовая игра';
+
+  if (page === 'name') {
+    const input = $('name-input');
+    input.value = playerName();
+    $('name-submit').disabled = !input.value.trim();
+    requestAnimationFrame(() => input.focus());
+  }
+  if (page === 'solo') renderTemplates();
+}
+
+function hideEntry() {
+  document.body.classList.remove('is-entry');
+  setPaused('entry', false);
+}
+
+function renderTemplates() {
+  for (const card of $('templates').children) {
+    const isSelected = card.dataset.template === selectedTemplate;
+    card.classList.toggle('is-selected', isSelected);
+    card.querySelector('.choice__action').textContent = isSelected ? 'Выбрано' : 'Выбрать →';
+  }
+}
+
 async function startNewGame() {
-    try {
-        setPauseState(true);
-        stopGameClock();
-        const playerName = getCurrentGameId();
-
-        await storage.deleteGame(playerName);
-
-        // Clear any computed snapshots
-        delete gameData._initialSnapshot;
-
-        // Navigate to registration so player can enter a name (or re-use existing)
-        if (typeof window.showPage === 'function') {
-            window.showPage('registration');
-        }
-    } catch (e) {
-        console.error('Не удалось корректно начать новую игру:', e);
-    }
+  const button = $('start-game');
+  button.disabled = true;
+  try {
+    await createGame(selectedTemplate, playerName() || 'Игрок');
+  } catch (error) {
+    console.error('Не удалось создать игру:', error);
+    toast('Не удалось загрузить данные игры', 'error');
+    return;
+  } finally {
+    button.disabled = false;
+  }
+  hideEntry();
+  renderAll();
 }
 
-async function bootstrapAppShell() {
+function bindEntry() {
+  for (const node of document.querySelectorAll('[data-go]')) {
+    node.addEventListener('click', () => showEntry(node.dataset.go));
+  }
+
+  const input = $('name-input');
+  input.addEventListener('input', () => { $('name-submit').disabled = !input.value.trim(); });
+  $('name-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = input.value.trim();
+    if (!name) return;
     try {
-        const pauseButtons = document.querySelectorAll('[data-game-pause-toggle]');
-        pauseButtons.forEach((button) => {
-            button.addEventListener('click', () => togglePauseState());
-        });
-
-        // Lightweight app-shell logic (safely runs on any page)
-        const storageKey = 'copilka-player-name';
-
-        function getPlayerName() {
-            try {
-                return localStorage.getItem(storageKey) || 'Игрок';
-            } catch (error) {
-                console.error('Не удалось загрузить имя игрока:', error);
-                return 'Игрок';
-            }
-        }
-
-        function setPlayerName(name) {
-            try {
-                localStorage.setItem(storageKey, name);
-            } catch (error) {
-                console.error('Не удалось сохранить имя игрока:', error);
-            }
-        }
-
-        function syncProfileNames() {
-            const playerName = getPlayerName();
-            document.querySelectorAll('.nav-profile, .profile-btn').forEach((el) => {
-                el.textContent = playerName;
-            });
-        }
-
-        function bindRegistration() {
-            const input = document.querySelector('.input-field');
-            const button = document.querySelector('.btn-continue');
-            if (!input || !button) throw new Error('Не удалось найти элементы ввода имени игрока или кнопку продолжения');
-
-            input.value = getPlayerName();
-
-            const submit = () => {
-                const value = input.value.trim() || 'Игрок';
-                setPlayerName(value);
-                syncProfileNames();
-                resumeGameAfterContinue();
-            };
-
-            button.addEventListener('click', () => {
-                void submit();
-            });
-            input.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void submit();
-                }
-            });
-        }
-
-        syncProfileNames();
-        bindRegistration();
-    } catch (e) {
-        console.error('bootstrapAppShell error', e);
-    }
-}
-
-function bootstrapTrade() {
-    try {
-        // Use a presence check to run only on pages that have trade UI
-        if (!document.querySelectorAll || !document.querySelector('.asset-card')) return;
-
-        (function () {
-            const assetCards = document.querySelectorAll('.asset-card');
-            const toggleSwitch = document.getElementById('toggleSwitch');
-            const buyOption = toggleSwitch ? toggleSwitch.querySelector('.option[data-value="buy"]') : null;
-            const sellOption = toggleSwitch ? toggleSwitch.querySelector('.option[data-value="sell"]') : null;
-            const selectedAssetName = document.getElementById('selectedAssetName');
-            const quantityLabel = document.getElementById('quantityLabel');
-            const unitLabel = document.getElementById('unitLabel');
-            const quantityInput = document.getElementById('quantityInput');
-            const totalAmount = document.getElementById('totalAmount');
-            const buyBtn = document.getElementById('buyBtn');
-            const sellBtn = document.getElementById('sellBtn');
-
-            let currentAsset = 'account';
-            let currentAction = 'buy';
-            let currentBond = 0;
-            let currentStock = 0;
-            let currentPif = 0;
-
-            const assetData = {
-                account: { label: 'Накопительный счет', quantityLabel: 'Сумма к пополнению/снятию', price: -1, infoId: 'accountInfo' },
-                bonds: { label: 'ОФЗ', quantityLabel: 'Количество', price: -1, infoId: 'bondsSelection' },
-                pif: { label: 'ПИФ1', quantityLabel: 'Количество', price: -1, infoId: 'pifSelection' },
-                stocks: { label: 'Акция1', quantityLabel: 'Количество', price: -1, infoId: 'stocksSelection' },
-                currency: { label: 'USD', quantityLabel: 'Количество', price: -1, infoId: 'currencyInfo' },
-                gold: { label: 'Золото', quantityLabel: 'Количество', price: -1, infoId: 'goldInfo' }
-            };
-
-            function safeNumber(value) {
-                return Number.isFinite(Number(value)) ? Number(value) : 0;
-            }
-
-            function formatMoney(value) {
-                return `${Math.round(safeNumber(value)).toLocaleString('ru-RU')} ₽`;
-            }
-
-            function resolveTickerByAsset() {
-                const selected = gameData?.selectedTickers || createDefaultSelectedTickers();
-                const others = Array.isArray(selected.others) ? selected.others : [];
-                const fundTickers = Array.isArray(selected.fundTickers) ? selected.fundTickers : [];
-                const usdTicker = selected.usdTicker || others.find((t) => /USD/i.test(String(t))) || 'USD';
-                const goldTicker = selected.goldTicker || others.find((t) => /GLDRUB/i.test(String(t))) || 'GLDRUB';
-
-                if (currentAsset === 'account') return selected.bankTicker || 'BANK';
-                if (currentAsset === 'bonds') return (Array.isArray(selected.bonds) ? selected.bonds[currentBond] : undefined) || null;
-                if (currentAsset === 'stocks') return (Array.isArray(selected.stocks) ? selected.stocks[currentStock] : undefined) || null;
-                if (currentAsset === 'pif') return (Array.isArray(fundTickers) ? fundTickers[currentPif] : undefined) || null;
-                if (currentAsset === 'currency') return usdTicker;
-                if (currentAsset === 'gold') return goldTicker;
-                throw new Error("Неизвестный актив: " + currentAsset);
-            }
-
-            function syncSelectedAssetNames() {
-                const selected = gameData?.selectedTickers || createDefaultSelectedTickers();
-                const prices = globalThis.game && typeof globalThis.game.getPrices === 'function' ? globalThis.game.getPrices() : null;
-
-                const usdTicker = selected.usdTicker;
-                const goldTicker = selected.goldTicker;
-
-                const fundList = Array.isArray(selected.fundTickers) ? selected.fundTickers : createDefaultSelectedTickers().fundTickers;
-                const bondList = Array.isArray(selected.bonds) ? selected.bonds : createDefaultSelectedTickers().bonds;
-                const stockList = Array.isArray(selected.stocks) ? selected.stocks : createDefaultSelectedTickers().stocks;
-
-                if (bondList && bondList.length) {
-                    currentBond = Math.min(currentBond, bondList.length - 1);
-                    const bondTicker = bondList[currentBond];
-                    const currentDate = gameData && gameData.date ? gameData.date : new Date(Number(gameData?.year || 2007), 8, 1);
-                    assetData.bonds.label = bondTicker || '—';
-                    assetData.bonds.price = (prices && typeof prices.getPrice === 'function' && bondTicker)
-                        ? Number(prices.getPrice(bondTicker, currentDate))
-                        : -1;
-                } else {
-                    assetData.bonds.label = '—';
-                    assetData.bonds.price = -1;
-                }
-
-                if (stockList && stockList.length) {
-                    currentStock = Math.min(currentStock, stockList.length - 1);
-                    const stockTicker = stockList[currentStock];
-                    const currentDate = gameData && gameData.date ? gameData.date : new Date(Number(gameData?.year || 2007), 8, 1);
-                    assetData.stocks.label = stockTicker || '—';
-                    assetData.stocks.price = (prices && typeof prices.getPrice === 'function' && stockTicker)
-                        ? Number(prices.getPrice(stockTicker, currentDate) || -1)
-                        : -1;
-                } else {
-                    assetData.stocks.label = '—';
-                    assetData.stocks.price = -1;
-                }
-
-                if (fundList && fundList.length) {
-                    currentPif = Math.min(currentPif, fundList.length - 1);
-                    const pifTicker = fundList[currentPif];
-                    const currentDate = gameData && gameData.date ? gameData.date : new Date(Number(gameData?.year || 2007), 8, 1);
-                    assetData.pif.label = pifTicker || '—';
-                    assetData.pif.price = (prices && typeof prices.getPrice === 'function' && pifTicker)
-                        ? Number(prices.getPrice(pifTicker, currentDate))
-                        : -1;
-                } else {
-                    assetData.pif.label = '—';
-                    assetData.pif.price = -1;
-                }
-
-                const currentDate = gameData && gameData.date ? gameData.date : new Date(Number(gameData?.year || 2007), 8, 1);
-                const bankRateValue = (prices && typeof prices.getPrice === 'function') ? Number(prices.getPrice('BANK', currentDate) || 0) : 0;
-
-                assetData.currency.price = (prices && typeof prices.getPrice === 'function' && usdTicker)
-                    ? Number(prices.getPrice(usdTicker, currentDate) || -1)
-                    : -1;
-                assetData.gold.price = (prices && typeof prices.getPrice === 'function' && goldTicker)
-                    ? Number(prices.getPrice(goldTicker, currentDate) || -1)
-                    : -1;
-
-                const accountInfoValue = document.querySelector('#accountInfo .value');
-                if (accountInfoValue) {
-                    accountInfoValue.textContent = Number.isFinite(bankRateValue) && bankRateValue > 0
-                        ? `${(bankRateValue).toFixed(1).replace('.', ',')}% годовых`
-                        : '10% годовых';
-                }
-
-                // --- update DOM price labels in the HTML ---
-                function fmtPrice(value, kind) {
-                    if (!Number.isFinite(Number(value)) || Number(value) < 0) return '—';
-                    if (kind === 'stock') return `${Math.round(Number(value)).toLocaleString('ru-RU')} ₽ / акция`;
-                    if (kind === 'pif') return `${Math.round(Number(value)).toLocaleString('ru-RU')} руб. за пай`;
-                    if (kind === 'currency') return `${Number(value).toFixed(2).replace('.', ',')} руб. / 1 USD`;
-                    return `${Math.round(Number(value)).toLocaleString('ru-RU')} руб.`;
-                }
-                // bonds selection items
-                const bondElems = Array.from(document.querySelectorAll('#bondsSelection .selection-item'));
-                bondElems.forEach((el, idx) => {
-                    const priceSpan = el.querySelector('.price');
-                    const priceVal = (Array.isArray(bondList) && bondList[idx]) ? (prices && typeof prices.getPrice === 'function' ? Number(prices.getPrice(bondList[idx], gameData.date) || -1) : -1) : -1;
-                    if (priceSpan) priceSpan.textContent = fmtPrice(priceVal, 'bond');
-                });
-
-                const stockElems = Array.from(document.querySelectorAll('#stocksSelection .selection-item'));
-                stockElems.forEach((el, idx) => {
-                    const priceSpan = el.querySelector('.price');
-                    const priceVal = (Array.isArray(stockList) && stockList[idx]) ? (prices && typeof prices.getPrice === 'function' ? Number(prices.getPrice(stockList[idx], gameData.date) || -1) : -1) : -1;
-                    if (priceSpan) priceSpan.textContent = fmtPrice(priceVal, 'stock');
-                });
-
-                const pifElems = Array.from(document.querySelectorAll('#pifSelection .selection-item'));
-                pifElems.forEach((el, idx) => {
-                    const priceSpan = el.querySelector('.price');
-                    const priceVal = (Array.isArray(fundList) && fundList[idx]) ? (prices && typeof prices.getPrice === 'function' ? Number(prices.getPrice(fundList[idx], gameData.date) || -1) : -1) : -1;
-                    if (priceSpan) priceSpan.textContent = fmtPrice(priceVal, 'pif');
-                });
-
-                const currencyPriceSpan = document.querySelector('#currencyInfo .value');
-                if (currencyPriceSpan) currencyPriceSpan.textContent = fmtPrice(assetData.currency.price, 'currency');
-                const goldPriceSpan = document.querySelector('#goldInfo .value');
-                if (goldPriceSpan) goldPriceSpan.textContent = fmtPrice(assetData.gold.price, 'gold');
-            }
-
-            function updateTotal() {
-                if (!quantityInput || !totalAmount) return;
-                const value = Number(String(quantityInput.value).replace(/\s/g, '')) || 0;
-                const total = currentAsset === 'account' ? value : value * (assetData[currentAsset]?.price || 0);
-                totalAmount.textContent = `${total.toLocaleString('ru-RU')} ₽`;
-            }
-
-            function updateUI() {
-                syncSelectedAssetNames();
-
-                const availableAssets = getAvailableAssets(gameData?.date || new Date());
-
-                assetCards.forEach((card) => {
-                    const asset = card.dataset.asset;
-                    const isAvailable = asset === 'account' ? true : Boolean(availableAssets[asset]);
-
-                    if (!isAvailable && currentAsset === asset) {
-                        currentAsset = 'account';
-                    }
-
-                    card.classList.toggle('active', asset === currentAsset && isAvailable);
-                    card.classList.toggle('inactive', !isAvailable);
-                    card.style.pointerEvents = isAvailable ? '' : 'none';
-                    card.setAttribute('aria-disabled', String(!isAvailable));
-
-                    const name = card.querySelector('.name');
-                    const desc = card.querySelector('.desc');
-                    const arrow = card.querySelector('.arrow');
-
-                    if (name) name.classList.toggle('faded', !isAvailable && asset !== currentAsset);
-                    if (desc) desc.classList.toggle('faded', !isAvailable && asset !== currentAsset);
-                    if (arrow) arrow.classList.toggle('faded', !isAvailable && asset !== currentAsset);
-                });
-
-                document.querySelectorAll('.selection-card, .asset-info-card').forEach((el) => {
-                    el.classList.remove('visible');
-                });
-
-                const data = assetData[currentAsset] || assetData.account;
-                const infoEl = document.getElementById(data.infoId);
-                if (infoEl) infoEl.classList.add('visible');
-
-                if (selectedAssetName) selectedAssetName.textContent = data.label;
-                if (quantityLabel) quantityLabel.textContent = data.quantityLabel;
-                if (unitLabel) unitLabel.textContent = data.unit;
-                if (buyBtn) buyBtn.textContent = currentAction === 'buy' ? 'Купить' : 'Продать';
-                if (sellBtn) sellBtn.textContent = currentAction === 'buy' ? 'Продать' : 'Купить';
-
-                updateTotal();
-                syncTradePanel();
-            }
-
-            function selectAsset(asset) {
-                if (asset === currentAsset) return;
-                currentAsset = asset;
-                updateUI();
-            }
-
-            function syncTradePanel() {
-                const available = document.querySelector('.deal-available');
-                if (available) {
-                    const cash = safeNumber(gameData?.portfolio?.cash);
-                    const bank = safeNumber(gameData?.portfolio?.bankAccount?.balance);
-                    available.textContent = `Доступно: ${formatMoney(cash + bank)}`;
-                }
-
-                const amount = Number(String(quantityInput.value).replace(/\s/g, '')) || 0;
-                const price = currentAsset === 'account' ? 1 : (assetData[currentAsset]?.price || 0);
-                if (totalAmount) totalAmount.textContent = `${(amount * price).toLocaleString('ru-RU')} ₽`;
-            }
-
-            async function tryTrade(el, action) {
-                console.log('Попытка сделки:', action, 'для актива', currentAsset);
-                const quantity = Number(String(quantityInput.value).replace(/\s/g, '')) || -1;
-                if (!quantity || quantity <= 0) {
-                    playAnimation(el, 'shake', 500);
-                    showToast('Введите корректное количество', 'error');
-                    return;
-                }
-
-                if (!Number.isInteger(quantity)) {
-                    playAnimation(el, 'shake', 500);
-                    showToast('Введите целое число', 'error');
-                    return;
-                }
-
-                const engine = globalThis.game && globalThis.game.engine ? globalThis.game.engine : null;
-
-                if (!engine) {
-                    throw new Error('Игра ещё не инициализирована');
-                }
-
-                try {
-                    const ticker = resolveTickerByAsset();
-                    if (!ticker) {
-                        throw new Error('Тикер не выбран для текущего актива');
-                    }
-                    if (currentAsset === 'account') {
-                        if (action === 'buy') {
-                            if ((Number(gameData.portfolio.cash) || 0) < quantity) {
-                                playAnimation(el, 'shake', 500);
-                                showToast(`Недостаточно средств. Нужно: ${quantity}, есть: ${Number(gameData.portfolio.cash) || 0}`, 'error');
-                                return;
-                            }
-                            engine.openBank(gameData, quantity)
-                        } else {
-                            if ((Number(gameData.portfolio.bankBalance) || 0) < quantity) {
-                                playAnimation(el, 'shake', 500);
-                                showToast(`Недостаточно средств на счёте. Есть: ${Number(gameData.portfolio.bankBalance) || 0}`, 'error');
-                                return
-                            }
-                            engine.withdrawBank(gameData, quantity);
-                        }
-                    } else {
-                        if (action === 'buy') {
-                            const price = Number(prices.getPrice(ticker, gameData.date));
-                            const cost = price * quantity;
-                            if ((Number(gameData.portfolio.cash) || 0) < cost) {
-                                showToast(`Недостаточно средств. Нужно: ${cost}, есть: ${Number(gameData.portfolio.cash) || 0}`, 'error');
-                                return;
-                            }
-                            engine.buyAsset(gameData, ticker, quantity);
-                        } else {
-                            if (!gameData.portfolio.assets[ticker]) {
-                                showToast(`У вас нет актива ${ticker}`, 'error');
-                                return;
-                            }
-                            
-                            if ((Number(gameData.portfolio.assets[ticker]) || 0) < quantity) {
-                                showToast(`У вас только ${Number(gameData.portfolio.assets[ticker]) || 0} акций ${ticker}`, 'error');
-                                return;
-                            }
-                            engine.sellAsset(gameData, ticker, quantity);
-                        }
-                    }
-
-                    showToast(`${action === 'buy' ? 'Покупка' : 'Продажа'} ${ticker} (${quantity} шт.) выполнена`, 'success');
-                    console.log('Выполняем сделку для тикера:', ticker, 'количество:', quantity, 'действие:', action);
-
-                    const playerName = getCurrentGameId();
-                    await storage.saveGame(playerName, gameData);
-                    refreshVisiblePage();
-                    updateUI();
-                } catch (error) {
-                    alert(error.message || 'Не удалось выполнить сделку');
-                    throw error;
-                }
-            }
-
-            if (assetCards.length) {
-                assetCards.forEach((card) => {
-                    card.addEventListener('click', () => {
-                        selectAsset(card.dataset.asset);
-                    });
-                });
-            }
-
-            document.querySelectorAll('#bondsSelection .selection-item').forEach((item) => {
-                item.addEventListener('click', () => {
-                    document.querySelectorAll('#bondsSelection .selection-item').forEach((el) => {
-                        el.classList.remove('active');
-                        el.classList.add('inactive');
-                    });
-                    item.classList.add('active');
-                    item.classList.remove('inactive');
-                    currentBond = [...document.querySelectorAll('#bondsSelection .selection-item')].indexOf(item);
-                    updateUI();
-                });
-            });
-
-            document.querySelectorAll('#stocksSelection .selection-item').forEach((item) => {
-                item.addEventListener('click', () => {
-                    document.querySelectorAll('#stocksSelection .selection-item').forEach((el) => {
-                        el.classList.remove('active');
-                        el.classList.add('inactive');
-                    });
-                    item.classList.add('active');
-                    item.classList.remove('inactive');
-                    currentStock = [...document.querySelectorAll('#stocksSelection .selection-item')].indexOf(item);
-                    updateUI();
-                });
-            });
-
-            document.querySelectorAll('#pifSelection .selection-item').forEach((item) => {
-                item.addEventListener('click', () => {
-                    document.querySelectorAll('#pifSelection .selection-item').forEach((el) => {
-                        el.classList.remove('active');
-                        el.classList.add('inactive');
-                    });
-                    item.classList.add('active');
-                    item.classList.remove('inactive');
-                    currentPif = [...document.querySelectorAll('#pifSelection .selection-item')].indexOf(item);
-                    updateUI();
-                });
-            });
-
-            if (toggleSwitch) {
-                toggleSwitch.addEventListener('click', (event) => {
-                    const option = event.target.closest('.option');
-                    if (!option || option.classList.contains('active')) return;
-
-                    if (buyOption) {
-                        buyOption.classList.toggle('active');
-                        buyOption.classList.toggle('inactive');
-                    }
-                    if (sellOption) {
-                        sellOption.classList.toggle('active');
-                        sellOption.classList.toggle('inactive');
-                    }
-
-                    currentAction = option.dataset.value;
-                    updateUI();
-                });
-            }
-
-            if (quantityInput) {
-                quantityInput.addEventListener('input', () => {
-                    updateTotal();
-                    syncTradePanel();
-                });
-            }
-
-            if (buyBtn) {
-                buyBtn.addEventListener('click', () => {
-                    void tryTrade(buyBtn, currentAction === 'buy' ? 'buy' : 'sell');
-                });
-            }
-
-            if (sellBtn) {
-                sellBtn.addEventListener('click', () => {
-                    void tryTrade(sellBtn, currentAction === 'buy' ? 'sell' : 'buy');
-                });
-            }
-
-            if (quantityInput) {
-                quantityInput.value = '1000';
-            }
-
-            globalThis.refreshTradeView = function refreshTradeView() {
-                try {
-                    syncSelectedAssetNames();
-                    updateUI();
-                } catch (error) {
-                    console.error('Ошибка обновления торговли:', error);
-                }
-            };
-
-            updateUI();
-        })();
-    } catch (e) {
-        console.error('bootstrapTrade error', e);
-    }
-}
-
-function bootstrapPortfolio() {
-    try {
-        if (!document.querySelector || !document.querySelector('.portfolio-table')) return;
-
-        (function () {
-            const debugPortfolio = (...args) => console.info('[portfolio]', ...args);
-
-            function formatMoney(value) {
-                return `${Math.round(Number(value || 0)).toLocaleString('ru-RU')} ₽`;
-            }
-
-            function collectAssetValue(portfolio, tickerList) {
-                const assetValues = portfolio.assetValues || {};
-                let total = 0;
-                tickerList.forEach((ticker) => {
-                    total += Number(assetValues[ticker]?.value || 0);
-                });
-                return total;
-            }
-
-            async function renderPortfolio() {
-                const portfolio = gameData.portfolio;
-                const bankBalance = Number(portfolio.bankBalance);
-                const cash = Number(portfolio.cash);
-                const total = gameEngine.getTotalValue(portfolio);
-
-                debugPortfolio('render data', { portfolio, cash, bankBalance, total, date: gameData.date, selectedTickers: gameData.selectedTickers });
-
-                updateDayBadge();
-
-                const summaryValues = document.querySelectorAll('.stats-row .stat-card .value');
-                if (summaryValues.length >= 2) {
-                    summaryValues[0].textContent = formatMoney(total);
-                    summaryValues[1].textContent = formatMoney(cash);
-                }
-
-                const rows = Array.from(document.querySelectorAll('.asset-row'));
-                let values = [];
-                if (gameData.selectedTickers) {
-                    values = [
-                        { label: 'Накопительный счёт', value: bankBalance, color: 'fill-green' },
-                        { label: 'ОФЗ', value: collectAssetValue(portfolio, [gameData.selectedTickers.bonds[0]]) || 0, color: 'fill-dark' },
-                        { label: 'Корп. облигации', value: collectAssetValue(portfolio, [gameData.selectedTickers.bonds[1]]) || 0, color: 'fill-mint' },
-                        { label: 'ВДО', value: collectAssetValue(portfolio, [gameData.selectedTickers.bonds[2]]) || 0, color: 'fill-gold' },
-                        { label: 'ПИФ', value: collectAssetValue(portfolio, gameData.selectedTickers.fundTickers) || 0, color: 'fill-sand' },
-                        { label: 'Акции', value: collectAssetValue(portfolio, gameData.selectedTickers.stocks) || 0, color: 'fill-blue' },
-                        { label: 'Иностранная валюта', value: collectAssetValue(portfolio, [gameData.selectedTickers.usdTicker]) || 0, color: 'fill-purple' },
-                        { label: 'Золото', value: collectAssetValue(portfolio, [gameData.selectedTickers.goldTicker]) || 0, color: 'fill-teal' }
-                    ];
-                } else {
-                    values = [
-                        { label: 'Накопительный счёт', value: bankBalance, color: 'fill-green' },
-                        { label: 'ОФЗ', value: 0, color: 'fill-dark' },
-                        { label: 'Корп. облигации', value: 0, color: 'fill-mint' },
-                        { label: 'ВДО', value: 0, color: 'fill-gold' },
-                        { label: 'ПИФ', value: 0, color: 'fill-sand' },
-                        { label: 'Акции', value: 0, color: 'fill-blue' },
-                        { label: 'Иностранная валюта', value: 0, color: 'fill-purple' },
-                        { label: 'Золото', value: 0, color: 'fill-teal' }
-                    ];
-                }
-                
-
-                const availability = getAvailableAssets(gameData?.date || new Date());
-                const rowAvailability = [
-                    { label: 'Накопительный счёт', available: availability.account },
-                    { label: 'ОФЗ', available: availability.bonds },
-                    { label: 'Корп. облигации', available: availability.bonds },
-                    { label: 'ВДО', available: availability.bonds },
-                    { label: 'ПИФ', available: availability.pif },
-                    { label: 'Акции', available: availability.stocks },
-                    { label: 'Иностранная валюта', available: availability.currency },
-                    { label: 'Золото', available: availability.gold }
-                ];
-
-                rows.forEach((row, index) => {
-                    const item = values[index];
-                    const available = rowAvailability[index]?.available ?? true;
-                    const title = row.querySelector('.asset-name');
-                    const value = row.querySelector('.asset-value');
-                    const fill = row.querySelector('.fill');
-                    if (title) {
-                        title.textContent = item.label;
-                        title.classList.toggle('inactive', !available || (item.value || 0) <= 0);
-                    }
-                    if (value) {
-                        value.textContent = formatMoney(item.value);
-                        value.classList.toggle('inactive', !available || (item.value || 0) <= 0);
-                    }
-                    if (fill) {
-                        const width = total > 0 ? Math.max(0, Math.min(100, (item.value / total) * 100)) : 0;
-                        fill.style.width = `${width}%`;
-                        fill.className = `fill ${item.color}`;
-                        fill.style.opacity = available ? '1' : '0.35';
-                    }
-                });
-            }
-
-            function bootstrapPortfolioInner() {
-                debugPortfolio('portfolio bootstrap start', { readyState: document.readyState, hasGame: !!globalThis.game });
-                (async () => {
-                    try {
-                        await renderPortfolio();
-                    } catch (error) {
-                        console.error('Ошибка при рендеринге портфеля: ', error);
-                    }
-                })();
-            }
-
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', bootstrapPortfolioInner, { once: true });
-            } else {
-                bootstrapPortfolioInner();
-            }
-
-            globalThis.refreshPortfolio = async function refreshPortfolioPage() {
-                if (!document.querySelector('.portfolio-table')) return;
-                await renderPortfolio();
-            };
-        })();
-    } catch (e) {
-        console.error('bootstrapPortfolio error', e);
-    }
-}
-
-function bootstrapTeaching() {
-    try {
-        if (!document.querySelector || !document.querySelectorAll('.asset-content')) return;
-
-        (function () {
-            const assetAvailabilityMap = {
-                account: 'account',
-                ofz: 'bonds',
-                corp: 'bonds',
-                vdo: 'bonds',
-                pif: 'pif',
-                stocks: 'stocks',
-                currency: 'currency',
-                gold: 'gold'
-            };
-
-            const assets = ['account', 'ofz', 'corp', 'vdo', 'pif', 'stocks', 'currency', 'gold'];
-            let currentIndex = 0;
-
-            const titles = [
-                'Накопительный счёт в банке',
-                'ОФЗ — облигации федерального займа',
-                'Корпоративные облигации',
-                'ВДО — высокодоходные облигации',
-                'ПИФ — паевые инвестиционные фонды',
-                'Акции',
-                'Иностранная валюта',
-                'Золото'
-            ];
-
-            const subtitles = [
-                'Разберём инструмент за 60 секунд',
-                'Ты даёшь государству деньги в долг',
-                'Компания занимает деньги у инвесторов',
-                'Высокий купон не бывает бесплатным',
-                'Много инвесторов — один фонд',
-                'Часть компании в твоем портфеле',
-                'Иностранные деньги и инструменты',
-                'Золото — инвестиционный товар'
-            ];
-
-            const exampleTitles = [
-                'Как считается доход за день',
-                'Доход по ОФЗ за полгода + влияние ставки ЦБ',
-                'Доход по облигации Компании А',
-                'Доход по облигации Компании В',
-                'Пример для ПИФ (скоро)',
-                'Финансовый результат по акции Компании С',
-                'Результат по дирхаму и евро',
-                'Пример для Золота (скоро)'
-            ];
-
-            const exampleDescs = [
-                'Например, если на начало дня на счете было 10000 рублей, потом на него с кошелька была переведена зарплата 10000 рублей, и в этот же день списаны 17000 рублей на покупку облигаций, то минимальный остаток в этот день на счете – 3000 рублей. За этот день процентный доход будет рассчитан: <code>(3000×1×10)/(365×100) = 0,82 рубля.</code>',
-                'Время владения ОФЗ номиналом 1000 рублей — полгода (182 дня). Был выплачен купон 7% годовых, бумага выросла с 830 до 850 рублей. Общий доход: <code>(850–830)+(1000×182×7)/(365×100) = 20 + 34,90 = 54,90 ₽</code>.<br><br><strong>Как зависит цена от ставки ЦБ?</strong> После покупки ОФЗ по 900 ₽ рост ключевой ставки может снизить цену до 850 ₽ — потеря 50 ₽ с каждой бумаги. В реальных расчётах учтите налоги и комиссии.',
-                'Облигация Компании А номиналом 1000 ₽, купон 12% годовых выплачивается ежемесячно. Владение 8 месяцев (≈9 выплат), цена упала с 930 до 920 ₽. Доход: <code>(920–930)+[(1000×31×12)/(365×100)]×9 = –10 + 91,73 = 81,73 ₽</code>. Налоги и комиссии не учтены.',
-                'Облигация Компании В номинал 1000 ₽, купон 25% годовых выплачивается раз в квартал. Владение 3 месяца (91 день), цена выросла с 960 до 975 ₽. Доход: <code>(975–960)+(1000×91×25)/(365×100) = 15 + 62,33 = 77,33 ₽</code>. Налоги и комиссии не учтены.',
-                'Пример для ПИФ пока в разработке.',
-                'Акция Компании С номиналом 5000 ₽ куплена за 8200 ₽ 1 декабря. В январе выплачены дивиденды 20% от номинала = 1000 ₽. 1 мая из-за санкций цена упала на 50% от цены покупки: 8200 × 0,5 = 4100 ₽. Продажа: <code>1000 (дивиденды) – 4100 (убыток) = –3100 ₽</code>. Налог на дивиденды и комиссии не учтены (убыток налогом не облагается).',
-                '31 января куплено 1000 дирхам по курсу 20,7921 ₽ и 1000 евро по курсу 89,5400 ₽. Продажа: дирхам 30 июня по 21,4225 ₽, евро 31 мая по 82,9705 ₽.<br><br>Дирхам: <code>(21,4225–20,7921)×1000 = +630,40 ₽</code><br>Евро: <code>(82,9705–89,5400)×1000 = –6569,50 ₽</code><br><strong>Итого: –5939,10 ₽</strong>',
-                'Пример для Золота пока в разработке.'
-            ];
-
-            const contents = Array.from(document.querySelectorAll('.asset-content'));
-            const paginationWrap = document.querySelector('.pagination-wrap');
-            const dots = Array.from(paginationWrap.querySelectorAll('.dot'));
-            const counter = document.getElementById('pageCounter');
-            const mainTitle = document.getElementById('mainTitle');
-            const subTitle = document.getElementById('subTitle');
-            const overlay = document.getElementById('exampleOverlay');
-            const closeBtn = document.getElementById('closeExample');
-            const questionCircle = document.getElementById('questionCircle');
-            const contentCard = document.getElementById('contentCard');
-            const exampleTitle = document.getElementById('exampleTitle');
-            const exampleDesc = document.getElementById('exampleDesc');
-            const prevBtn = document.getElementById('prevBtn');
-            const nextBtn = document.getElementById('nextBtn');
-
-            let availableContent = [];
-            let isTransitioning = false;
-            let resizeTimeout;
-
-            function rebuildAvailableContent() {
-                const availableAssets = getAvailableAssets(gameData?.date || new Date());
-                availableContent = contents.filter((content) => {
-                    const assetKey = assetAvailabilityMap[content.dataset.asset];
-                    return assetKey ? Boolean(availableAssets[assetKey]) : true;
-                });
-            }
-
-            function updateView(index) {
-                rebuildAvailableContent();
-                if (!availableContent.length) return;
-                if (isTransitioning) return;
-                isTransitioning = true;
-
-                const safeIndex = ((index % availableContent.length) + availableContent.length) % availableContent.length;
-                const activeContent = availableContent[safeIndex];
-                const slideIndex = contents.indexOf(activeContent);
-
-                contents.forEach(el => {
-                    const isVisible = el === activeContent;
-                    el.classList.toggle('active', isVisible);
-                    el.style.display = isVisible ? 'flex' : 'none';
-                });
-
-                requestAnimationFrame(() => {
-                    activeContent.classList.add('active');
-
-                    dots.forEach((dot, i) => {
-                        const isVisibleDot = contents[i] && availableContent.includes(contents[i]);
-                        dot.style.display = isVisibleDot ? 'inline-block' : 'none';
-                        dot.classList.toggle('active', isVisibleDot && contents[i] === activeContent);
-                    });
-
-                    currentIndex = safeIndex;
-                    counter.textContent = `${safeIndex + 1} / ${availableContent.length}`;
-                    mainTitle.textContent = titles[slideIndex];
-                    subTitle.textContent = subtitles[slideIndex];
-
-                    exampleTitle.textContent = exampleTitles[slideIndex];
-                    exampleDesc.innerHTML = exampleDescs[slideIndex];
-
-                    isTransitioning = false;
-                });
-
-                closeOverlay();
-            }
-
-            function goTo(index) {
-                if (!availableContent.length) return;
-                if (index < 0) index = availableContent.length - 1;
-                if (index >= availableContent.length) index = 0;
-                updateView(index);
-            }
-
-            function openOverlay() {
-                overlay.classList.add('visible');
-                contentCard.classList.add('blurred');
-            }
-
-            function closeOverlay() {
-                overlay.classList.remove('visible');
-                contentCard.classList.remove('blurred');
-            }
-
-            prevBtn.addEventListener('click', () => goTo(currentIndex - 1));
-            nextBtn.addEventListener('click', () => goTo(currentIndex + 1));
-            document.addEventListener('keydown', (event) => {
-                if (event.key === 'ArrowRight' && document.querySelector('.page-section.active')?.id === 'teaching') {
-                    event.preventDefault();
-                    goTo(currentIndex + 1);
-                }
-            });
-            document.addEventListener('keydown', (event) => {
-                if (event.key === 'ArrowLeft' && document.querySelector('.page-section.active')?.id === 'teaching') {
-                    event.preventDefault();
-                    goTo(currentIndex - 1);
-                }
-            });
-
-            dots.forEach((dot, i) => {
-                dot.addEventListener('click', () => {
-                    const content = contents[i];
-                    if (!content || !availableContent.includes(content)) return;
-                    goTo(availableContent.indexOf(content));
-                });
-            });
-
-            questionCircle.addEventListener('click', function(e) {
-                e.stopPropagation();
-                if (overlay.classList.contains('visible')) {
-                    closeOverlay();
-                } else {
-                    openOverlay();
-                }
-            });
-
-            closeBtn.addEventListener('click', closeOverlay);
-
-            overlay.addEventListener('click', function(e) {
-                if (e.target === overlay) {
-                    closeOverlay();
-                }
-            });
-
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && overlay.classList.contains('visible')) {
-                    closeOverlay();
-                }
-            });
-
-            globalThis.refreshTeachingView = function refreshTeachingView(index = 0) {
-                rebuildAvailableContent();
-                if (!availableContent.length) return;
-                updateView(index);
-            };
-
-            updateView(0);
-
-            globalThis.addEventListener('resize', () => {
-                clearTimeout(resizeTimeout);
-                resizeTimeout = setTimeout(() => {
-                    const active = availableContent[currentIndex];
-                    if (active) {
-                        contents.forEach(el => {
-                            const isVisible = el === active;
-                            el.style.display = isVisible ? 'flex' : 'none';
-                            el.classList.toggle('active', isVisible);
-                        });
-                        requestAnimationFrame(() => {
-                            active.classList.add('active');
-                        });
-                    }
-                }, 200);
-            });
-        })();
-    } catch (e) {
-        console.error('bootstrapTeaching error', e);
-    }
-}
-
-const bootstrapPageModules = () => {
-    try {
-        bootstrapAppShell();
-        bootstrapTrade();
-        bootstrapPortfolio();
-        bootstrapTeaching();
-        bootstrapEventUI();
-        updateDayBadge();
-        setupIntroductionFlow();
-        setPauseState(true);
-        document.addEventListener('keydown', (event) => {
-            if ((event.code === 'Space' || event.key === ' ') && document.querySelector('.page-section.active')?.id === 'portfolio') {
-                event.preventDefault();
-                togglePauseState();
-            }
-        }, { passive: false });
+      localStorage.setItem(PLAYER_KEY, name);
     } catch (error) {
-        console.error('page bootstraps failed', error);
+      console.warn('Не удалось сохранить имя игрока:', error);
     }
-};
+    showEntry('mode');
+  });
 
-// End game immediately and show results (even if year not finished)
-async function endGameNow() {
-    try {
-        setPauseState(true);
-        stopGameClock();
+  $('templates').addEventListener('click', (event) => {
+    const card = event.target.closest('[data-template]');
+    if (!card) return;
+    selectedTemplate = card.dataset.template;
+    renderTemplates();
+  });
 
-        // persist current state before showing results
-        try {
-            const playerName = getCurrentGameId();
-            await storage.saveGame(playerName, gameData);
-        } catch (e) {
-            console.warn('Не удалось сохранить игру перед показом результатов:', e);
-        }
-
-        // ensure initial snapshot exists
-        try {
-            if (!gameData._initialSnapshot) {
-                const safeYear = Number(gameData.year) || 2007;
-                gameData._initialSnapshot = computePortfolioSnapshot(getGameStartDate(safeYear));
-            }
-        } catch (e) {
-            console.warn('Ошибка при создании начального снимка перед завершением:', e);
-        }
-
-        // show results
-        try {
-            showYearResults();
-        } catch (e) {
-            console.error('Ошибка при отображении результатов:', e);
-            if (typeof window.showPage === 'function') window.showPage('results');
-        }
-    } catch (e) {
-        console.error('endGameNow failed', e);
-    }
+  $('start-game').addEventListener('click', () => void startNewGame());
 }
 
-function bootstrapEventUI() {
-    try {
-        const acceptBtn = document.getElementById('eventAccept');
-        if (acceptBtn) {
-            acceptBtn.addEventListener('click', async () => {
-                try {
-                    const eventObj = gameData && gameData.pendingEvent;
-                    if (!eventObj) {
-                        closeEventScreen();
-                        return;
-                    }
+function closeLessonSilently() {
+  ui.lesson = null;
+  $('learn').hidden = true;
+  document.body.classList.remove('is-learning');
+  setPaused('lesson', false);
+}
 
-                    // apply decision via engine
-                    try {
-                        gameEngine.changeCash(gameData, eventObj.amount);
-                    } catch (e) {
-                        console.error('Ошибка при применении решения события:', e);
-                        alert(e.message || 'Ошибка при обработке события');
-                        throw error;
-                    }
+function bindStaticControls() {
+  bindEntry();
 
-                    // persist and refresh
-                    try {
-                        const playerName = getCurrentGameId();
-                        await storage.saveGame(playerName, gameData);
-                    } catch (e) {
-                        console.warn('Не удалось сохранить после события:', e);
-                    }
-                    gameData.pendingEvent = null;
-                    refreshVisiblePage();
-                    closeEventScreen();
-                } catch (e) {
-                    console.error('event accept handler failed', e);
-                }
-            });
-        }
-    } catch (e) {
-        console.error('bootstrapEventUI error', e);
+  $('month-days').addEventListener('animationend', (event) => {
+    if (event.animationName === 'day-fill') void advanceDay();
+  });
+
+  $('capital-switch').addEventListener('click', (event) => {
+    const mode = event.target.closest('button')?.dataset.mode;
+    if (!mode) return;
+    ui.capitalMode = mode;
+    renderHeader();
+  });
+
+  $('learn-close').addEventListener('click', closeLesson);
+  $('modal-confirm').addEventListener('click', closeModal);
+  $('final-restart').addEventListener('click', () => void restart());
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('learn').hidden) closeLesson();
+  });
+
+  document.addEventListener('visibilitychange', () => setPaused('hidden', document.hidden));
+}
+
+// Сохранённая партия продолжается сразу, иначе — вступительные экраны
+async function init() {
+  bindStaticControls();
+  let loaded = false;
+  try {
+    loaded = await loadGame();
+  } catch (error) {
+    console.error('Не удалось загрузить сохранение:', error);
+  }
+  if (!loaded) {
+    showEntry('start');
+    return;
+  }
+
+  renderAll();
+  if (game.finished) finishGame();
+  else if (game.pendingEvent) showLifeEvent(game.pendingEvent);
+}
+
+// ===== Консоль =====
+// setCardState('bonds', 'locked') | setCardState('all', 'unlock') | cardStates()
+// game.pause() | game.resume() | game.nextDay() | game.finish() | game.restart()
+// Полный список с описанием — в README.md
+
+// Мгновенное завершение: итоги по текущему портфелю, незакрытое жизненное событие отменяется
+function finishNow() {
+  if (!game) {
+    console.warn('Игра ещё не начата');
+    return;
+  }
+  if (game.finished) return;
+  closeLessonSilently();
+  $('modal').hidden = true;
+  onModalConfirm = null;
+  setPaused('modal', false);
+  game.pendingEvent = null;
+  finishGame();
+  void save();
+}
+
+function setCardState(key, cardState) {
+  if (!game) {
+    console.warn('Игра ещё не начата');
+    return;
+  }
+  if (!CARD_STATES.includes(cardState)) {
+    console.warn(`Неизвестное состояние: ${cardState}. Доступны: ${CARD_STATES.join(', ')}`);
+    return;
+  }
+  const keys = key === 'all' ? Object.keys(CATEGORIES) : [key];
+  for (const k of keys) {
+    if (!CATEGORIES[k]) {
+      console.warn(`Неизвестная карточка: ${k}. Доступны: all, ${Object.keys(CATEGORIES).join(', ')}`);
+      return;
     }
+    game.cards[k] = cardState;
+  }
+  renderField();
+  refresh();
+  void save();
+  return cardStates();
 }
 
-function triggerTestEvent() {
-    try {
-        if (gameData && gameData.pendingEvent) {
-            showPendingEvent();
-            return;
-        }
-
-        const eventObj = gameEngine && typeof gameEngine.createRandomEvent === 'function'
-            ? gameEngine.createRandomEvent()
-            : null;
-
-        if (!eventObj) {
-            console.warn('Невозможно создать тестовый ивент: gameEngine.createRandomEvent недоступен');
-            return;
-        }
-
-        gameData.pendingEvent = eventObj;
-        showPendingEvent();
-    } catch (e) {
-        console.error('triggerTestEvent error', e);
-    }
+function cardStates() {
+  return { ...game.cards };
 }
 
-function showPendingEvent() {
-    try {
-        const ev = gameData && gameData.pendingEvent;
-        if (!ev) return;
-        const prev = document.querySelector('.page-section.active');
-        _eventPrevPage = prev ? prev.id : null;
-        _eventPrevPaused = gameClock.isPaused;
+Object.assign(window, {
+  setCardState,
+  cardStates,
+  game: {
+    data: () => game,
+    engine,
+    prices: () => prices,
+    pause: () => setPaused('console', true),
+    resume: () => setPaused('console', false),
+    nextDay: () => {
+      const paused = new Set(ui.pause);
+      ui.pause.clear();
+      return advanceDay().finally(() => paused.forEach((reason) => ui.pause.add(reason)));
+    },
+    finish: finishNow,
+    restart
+  }
+});
 
-        // populate UI
-        const root = document.getElementById('event');
-        if (!root) return;
-        const icon = root.querySelector('.event-icon');
-        const title = root.querySelector('.event-title');
-        const amount = root.querySelector('.event-amount');
-        const desc = root.querySelector('.event-desc');
-        const accept = root.querySelector('#eventAccept');
-        const isGood = ev.amount > 0;
-
-        if (icon) {
-            icon.textContent = ev.icon || '';
-            icon.style.background = isGood ? '#E8F8EA' : '#FDECEC';
-        }
-        if (title) title.textContent = ev.title || '';
-        if (amount) {
-            amount.textContent = ev.amount;
-            amount.style.color = isGood ? '#2BAE59' : '#D94A4A';
-        }
-        if (desc) desc.textContent = ev.text || '';
-        if (accept) {
-            accept.textContent = ev.buttonText;
-            accept.style.background = isGood ? '#2BAE59' : '#D94A4A';
-        }
-        setPauseState(true);
-        if (typeof window.showPage === 'function') window.showPage('event');
-    } catch (e) {
-        console.error('showPendingEvent error', e);
-    }
-}
-
-function closeEventScreen() {
-    try {
-        // hide event page and return to previous
-        if (_eventPrevPage && typeof window.showPage === 'function') {
-            window.showPage(_eventPrevPage);
-        } else if (typeof window.showPage === 'function') {
-            window.showPage('portfolio');
-        }
-
-        // restore pause state
-        if (!_eventPrevPaused) {
-            setPauseState(false);
-            startGameClock();
-        } else {
-            setPauseState(true);
-        }
-    } catch (e) {
-        console.error('closeEventScreen error', e);
-    }
-}
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        bootstrapPageModules();
-    }, { once: true });
-} else {
-    bootstrapPageModules();
-}
-
-globalThis.game = {
-    data: () => gameData,
-    engine: gameEngine,
-    getPrices: () => prices,
-    getStorage: () => storage,
-    initialize: initializeGame,
-};
-
-globalThis.setGameDate = setGameDate;
-
-// expose for HTML onclick handlers
-globalThis.startNewGame = startNewGame;
-globalThis.endGameNow = endGameNow;
-
-// --- Event UI integration ---
-let _eventPrevPage = null;
-let _eventPrevPaused = null;
-
-globalThis.triggerTestEvent = triggerTestEvent;
+init();

@@ -1,11 +1,18 @@
+const DEBT_DAILY_RATE = 0.02;
+
 export class GameEngine {
     /**
      * @param {IStorage} storage - Хранилище
      * @param {IPrices} prices - Источник цен
+     * @param {Object} [options]
+     * @param {(message: string, type?: string) => void} [options.notify] - Показ уведомлений игроку
+     * @param {(ticker: string) => string} [options.nameOf] - Отображаемое имя тикера (реальные названия скрыты до конца игры)
      */
-    constructor(storage, prices) {
+    constructor(storage, prices, { notify, nameOf } = {}) {
         this.storage = storage;
         this.prices = prices;
+        this.notify = notify || (() => {});
+        this.nameOf = nameOf || ((ticker) => ticker);
         this.goodEvents = [
             {
                 icon: '🎁',
@@ -194,6 +201,16 @@ export class GameEngine {
     }
 
     /**
+     * Долг (отрицательные свободные деньги) растёт на 2% в день — сложный процент
+     */
+    applyDebtInterest(portfolio) {
+        const cash = Number(portfolio?.cash) || 0;
+        if (cash < 0) {
+            portfolio.cash = cash * (1 + DEBT_DAILY_RATE);
+        }
+    }
+
+    /**
      * Начислить проценты по депозитам
      */
     applyBankInterest(portfolio, date) {
@@ -229,16 +246,20 @@ export class GameEngine {
             let val = this.prices.getValueByDate(ticker, date);
             let payoutValue = Number(val[0]) || 0;
             const amount = payoutValue * Number(quantity);
+            const name = this.nameOf(ticker);
             if (val[1] === -1) {
                 if (payoutValue === 0) {
-                    showToast(`Технический дефолт ${ticker}, выплата не состоялась`, 'error');
+                    this.notify(`Технический дефолт ${name}, выплата не состоялась`, 'error');
                     continue;
                 } else {
-                    showToast(`Технический дефолт ${ticker}, ${amount} выплачено с задержкой`, 'error');
+                    this.notify(`Технический дефолт ${name}, ${Math.round(amount)} ₽ выплачено с задержкой`, 'error');
                 }
             } else if (val[1] === -2) {
-                showToast(`Дефолт ${ticker}, вложения обнулены`, 'error');
-                portfolio.assetValues[ticker].quantity = 0;
+                this.notify(`Дефолт ${name}, вложения обнулены`, 'error');
+                delete portfolio.assets[ticker];
+                const entry = this.ensureAssetValuesEntry(portfolio, ticker);
+                entry.quantity = 0;
+                entry.value = 0;
                 continue;
             }
 
@@ -252,8 +273,10 @@ export class GameEngine {
             }
 
             portfolio.cash += amount;
+            this.ensureAssetValuesEntry(portfolio, ticker).withdrawn += amount;
+
             if (val[1] === 0) {
-                showToast(`${ticker} выплачивает ${amount}`, 'success');
+                this.notify(`${name} выплачивает ${Math.round(amount)} ₽`, 'success');
             }
             gameData.history.push({
                 type: 'ASSET_PAYOUT',
@@ -267,6 +290,25 @@ export class GameEngine {
     }
 
     /**
+     * Гарантирует наличие записи в portfolio.assetValues для тикера
+     */
+    ensureAssetValuesEntry(portfolio, ticker) {
+        if (!portfolio) return null;
+        portfolio.assetValues = portfolio.assetValues || {};
+        if (!portfolio.assetValues[ticker]) {
+            portfolio.assetValues[ticker] = {
+                quantity: 0,
+                price: 0,
+                value: 0,
+                invested: 0,
+                withdrawn: 0,
+                yield: 0.0
+            };
+        }
+        return portfolio.assetValues[ticker];
+    }
+
+    /**
      * Переоценить активы по текущим ценам
      */
     revaluateAssets(portfolio, date) {
@@ -275,14 +317,19 @@ export class GameEngine {
             return;
         }
 
-        for (const [ticker, quantity] of Object.entries(portfolio.assets || {})) {
+        // Проданные целиком активы удалены из assets, но их запись в assetValues нужно обнулить
+        const tickers = new Set([...Object.keys(portfolio.assets || {}), ...Object.keys(portfolio.assetValues || {})]);
+        for (const ticker of tickers) {
+            const quantity = portfolio.assets?.[ticker];
             const price = Number(this.prices.getPrice(ticker, safeDate));
-            portfolio.assetValues = portfolio.assetValues || {};
-            portfolio.assetValues[ticker] = {
-                quantity: Number(quantity) || 0,
-                price,
-                value: (Number(quantity) || 0) * price
-            };
+            const entry = this.ensureAssetValuesEntry(portfolio, ticker);
+
+            entry.quantity = Number(quantity) || 0;
+            entry.price = price;
+            entry.value = entry.quantity * price;
+
+            const invested = Number(entry.invested) || 0;
+            entry.yield = invested <= 0 ? 0 : ((entry.value + entry.withdrawn - invested) / invested) * 100;
         }
     }
 
@@ -309,9 +356,11 @@ export class GameEngine {
         safeDate.setDate(safeDate.getDate() + 1);
         gameData.date = safeDate;
 
+        this.applyDebtInterest(gameData.portfolio);
         this.applyBankInterest(gameData.portfolio, gameData.date);
-        this.revaluateAssets(gameData.portfolio, gameData.date);
         this.applyAssetDatePayments(gameData);
+        this.checkSpeshialEvents(gameData);
+        this.revaluateAssets(gameData.portfolio, gameData.date);
 
         if (!gameData.monthlyEvents) {
             gameData.monthlyEvents = {};
@@ -356,6 +405,16 @@ export class GameEngine {
         });
     }
 
+    /**
+     * Полный дефолт уже наступил: после него инструмент отключён
+     */
+    isDefaulted(ticker, date) {
+        const defaultDate = this.prices?.getDefaultDate?.(ticker);
+        if (!defaultDate) return false;
+        const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        return defaultDate <= day;
+    }
+
     buyAsset(gameData, ticker, amount) {
         const safeAmount = Number(amount) || 0;
         if (safeAmount <= 0) {
@@ -367,20 +426,29 @@ export class GameEngine {
             throw new Error('Некорректная дата игры');
         }
 
+        if (this.isDefaulted(ticker, date)) {
+            throw new Error(`${this.nameOf(ticker)}: дефолт, торги недоступны`);
+        }
+
         const price = Number(this.prices.getPrice(ticker, date));
+        if (!(price > 0)) {
+            throw new Error(`${this.nameOf(ticker)} пока не торгуется`);
+        }
         const cost = price * safeAmount;
-        
+
         if ((Number(gameData.portfolio.cash) || 0) < cost) {
             throw new Error(`Недостаточно средств. Нужно: ${cost}, есть: ${Number(gameData.portfolio.cash) || 0}`);
         }
-        
+
         gameData.portfolio.cash -= cost;
-        
+
         if (!gameData.portfolio.assets[ticker]) {
             gameData.portfolio.assets[ticker] = 0;
         }
         gameData.portfolio.assets[ticker] += safeAmount;
-        
+
+        this.ensureAssetValuesEntry(gameData.portfolio, ticker).invested += cost;
+
         gameData.history.push({
             type: 'BUY',
             ticker,
@@ -410,11 +478,11 @@ export class GameEngine {
         const revenue = price * safeAmount;
         
         if (!gameData.portfolio.assets[ticker]) {
-            throw new Error(`У вас нет актива ${ticker}`);
+            throw new Error(`У вас нет актива ${this.nameOf(ticker)}`);
         }
-        
+
         if ((Number(gameData.portfolio.assets[ticker]) || 0) < safeAmount) {
-            throw new Error(`У вас только ${Number(gameData.portfolio.assets[ticker]) || 0} акций ${ticker}`);
+            throw new Error(`У вас только ${Number(gameData.portfolio.assets[ticker]) || 0} ед. ${this.nameOf(ticker)}`);
         }
         
         gameData.portfolio.assets[ticker] -= safeAmount;
@@ -424,6 +492,8 @@ export class GameEngine {
         }
         
         gameData.portfolio.cash += revenue;
+
+        this.ensureAssetValuesEntry(gameData.portfolio, ticker).withdrawn += revenue;
         
         gameData.history.push({
             type: 'SELL',
@@ -442,26 +512,64 @@ export class GameEngine {
     checkSalary(gameData) {
         const day = gameData.date.getDate();
         if (day === 10 || day === 25) {
-            gameData.portfolio.cash += 10000;
-            showToast(`Начислена зарплата 10000₽`, 'success');
+            const amount = 10000;
+            gameData.portfolio.cash += amount;
+            gameData.history.push({
+                type: 'SALARY',
+                amount,
+                date: new Date(gameData.date)
+            });
+            this.notify(`${day === 10 ? 'Аванс' : 'Зарплата'}: +${amount} ₽`, 'success');
         }
     }
 
     checkSpeshialEvents(gameData) {
+        if (!gameData || !gameData.portfolio || !gameData.date) {
+            return;
+        }
+
+        const date = gameData.date instanceof Date ? new Date(gameData.date) : new Date(String(gameData.date));
+        if (Number.isNaN(date.getTime())) {
+            return;
+        }
+
         const day = date.getDate();
         const month = date.getMonth();
         const year = date.getFullYear();
 
-        if (day === 0 && month === 0 && year === 0) {
-            showToast(`Обратный сплит VTBR (5000 к 1)`, 'error');
-        } else if (day === 0 && month === 0 && year === 0) {
-            showToast(`Сплит GMKN: 1 к 100`, 'error');
-        } else if (day === 0 && month === 0 && year === 0) {
-            showToast(`Сплит TRNFP: 1 к 100`, 'error');
-        } else if (day === 0 && month === 0 && year === 0) {
-            showToast(`Сплит PLZL: 1 к 10`, 'error');
-        } else if (day === 0 && month === 0 && year === 0) {
-            showToast(`Обязательный выкуп с 5 октября по 14 декабря`, 'error');
+        // Даты из примечаний tickers.csv (в этот день в data.json уже цена после сплита).
+        // month — индекс месяца Date: 0 = январь.
+        const splitRules = [
+            { ticker: 'VTBR', day: 15, month: 6, year: 2024, ratio: 1 / 5000 }, // 2024-07-15
+            { ticker: 'GMKN', day: 8, month: 3, year: 2024, ratio: 100 },       // 2024-04-08
+            { ticker: 'TRNFP', day: 21, month: 1, year: 2024, ratio: 100 },     // 2024-02-21
+            { ticker: 'PLZL', day: 27, month: 2, year: 2025, ratio: 10 }        // 2025-03-27
+        ];
+
+        for (const rule of splitRules) {
+            if (day !== rule.day || month !== rule.month || year !== rule.year) continue;
+
+            const ticker = rule.ticker;
+            const portfolio = gameData.portfolio;
+            const quantity = Number(portfolio.assets[ticker]);
+            if (!Number.isFinite(quantity) || quantity <= 0) continue;
+
+            const price = Number(this.prices?.getPrice?.(ticker, date) || 0);
+            // price — уже новая цена, старая = price × ratio. Дробный остаток после округления
+            // количества вниз возвращается деньгами.
+            const oldValue = quantity * price * rule.ratio;
+            const updatedQuantity = Math.floor(quantity * rule.ratio);
+
+            portfolio.assets[ticker] = updatedQuantity;
+            const entry = this.ensureAssetValuesEntry(portfolio, ticker);
+            entry.quantity = updatedQuantity;
+            entry.price = price;
+            entry.value = updatedQuantity * price;
+
+            const deltaValue = oldValue - (updatedQuantity * price);
+            portfolio.cash += deltaValue;
+
+            this.notify(`Сплит ${this.nameOf(ticker)}: ${rule.ratio >= 1 ? `${rule.ratio}x` : `1/${1 / rule.ratio}`}`, 'error');
         }
     }
 
@@ -494,40 +602,45 @@ export class GameEngine {
         };
     }
 
-    checkLifeEvents(gameData) {
-        const monthlyEvents = gameData?.monthlyEvents || {};
+    /**
+     * Расписание жизненных событий на игровой год (с 1 сентября года gameData.year).
+     * lifeEvents: 'normal' — по одному событию в марте–августе, 'high' — каждый месяц.
+     * Хороших и плохих событий поровну, порядок случайный.
+     */
+    planLifeEvents(gameData) {
+        const year = Number(gameData.year) || gameData.date.getFullYear();
+        const months = gameData.lifeEvents === 'high'
+            ? Array.from({ length: 12 }, (_, i) => new Date(year, 8 + i, 1))
+            : Array.from({ length: 6 }, (_, i) => new Date(year + 1, 2 + i, 1));
 
-        let current = (gameData.date.getMonth() + 4) % 12 - 6; // magic
-
-        if (current < 0) return null;
-
-        if (!gameData._quarterEventsInit) {
-            gameData._quarterEventsInit = true;
-            gameData._quarterEvents = {};
-            gameData._quarterTypes = {};
-
-            const types = ['good', 'good', 'good', 'bad', 'bad', 'bad'];
-            
-            for (let i = types.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [types[i], types[j]] = [types[j], types[i]];
-            }
-
-            const quarters = [2, 3, 4, 5, 6, 7]; // март, апрель, май, июнь, июль, август
-            for (let q = 0; q < quarters.length; q++) {
-                const eventMonth = quarters[q];
-                const eventDay = this.getRandomEventDay();
-                
-                gameData._quarterEvents[q] = { date: new Date(gameData.date.getFullYear(), eventMonth, eventDay) };
-                gameData._quarterTypes[q] = types[q]; // good или bad
-            }
+        const types = months.map((_, i) => (i % 2 === 0 ? 'good' : 'bad'));
+        for (let i = types.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [types[i], types[j]] = [types[j], types[i]];
         }
 
-        const eventInfo = gameData._quarterEvents[current];
-        
-        if (eventInfo && gameData.date.getDate() === eventInfo.date.getDate() && gameData.date.getMonth() === eventInfo.date.getMonth()) {
-            const isGood = gameData._quarterTypes[current] === 'good';
-            
+        return months.map((month, i) => {
+            const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+            const day = Math.min(this.getRandomEventDay(), daysInMonth);
+            return { date: new Date(month.getFullYear(), month.getMonth(), day), type: types[i] };
+        });
+    }
+
+    checkLifeEvents(gameData) {
+        if (!gameData._lifeEventPlan) {
+            gameData._lifeEventPlan = this.planLifeEvents(gameData);
+        }
+
+        const today = gameData.date;
+        const eventInfo = gameData._lifeEventPlan.find(({ date }) => (
+            date.getFullYear() === today.getFullYear()
+            && date.getMonth() === today.getMonth()
+            && date.getDate() === today.getDate()
+        ));
+
+        if (eventInfo) {
+            const isGood = eventInfo.type === 'good';
+
 
             // Выбираем случайное событие из соответствующего списка
             const eventPool = isGood ? this.goodEvents : this.badEvents;
@@ -556,38 +669,5 @@ export class GameEngine {
             day: new Date(gameData.date)
         });
         return gameData;
-    }
-
-    /**
-     * Получить итоговую рекомендацию
-     */
-    getRecommendation(gameData) {
-        const initialCapital = 250000; // 10 000 (подарок) + 20 000 * 12 месяцев
-        const finalCapital = this.getTotalValue(gameData.portfolio);
-        const profit = finalCapital - initialCapital;
-        const percent = (profit / initialCapital) * 100;
-        
-        if (profit > 20000) {
-            return {
-                type: 'success',
-                text: 'Молодцом! Твои инвестиционные идеи были успешны! 🎉',
-                profit,
-                percent
-            };
-        } else if (profit > 0) {
-            return {
-                type: 'moderate',
-                text: 'Пока тебе лучше инвестировать в низкорисковые активы, например, в ОФЗ',
-                profit,
-                percent
-            };
-        } else {
-            return {
-                type: 'fail',
-                text: 'Наверное, тебе лучше вкладывать деньги в надежный банк под стабильный процент',
-                profit,
-                percent
-            };
-        }
     }
 }

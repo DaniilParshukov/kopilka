@@ -53,7 +53,6 @@ export class LocalStorageAdapter {
         try {
             const serialized = JSON.stringify(serializeForStorage(data));
             localStorage.setItem(`game_${gameId}`, serialized);
-            console.log(`✅ Игра ${gameId} сохранена`);
         } catch (error) {
             console.error('❌ Ошибка сохранения:', error);
             throw error;

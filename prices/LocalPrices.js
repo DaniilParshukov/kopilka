@@ -105,6 +105,17 @@ export class LocalPrices {
         return this.prices[ticker] || [];
     }
 
+    /**
+     * Дата полного дефолта (status -2) в формате YYYY-MM-DD или null
+     */
+    getDefaultDate(ticker) {
+        let first = null;
+        for (const [date, [, status]] of this.dateValue[ticker] || []) {
+            if (status === -2 && (!first || date < first)) first = date;
+        }
+        return first;
+    }
+
     getValueByDate(ticker, date) {
         if (!this.isLoaded) {
             throw new Error('Данные еще не загружены. Дождитесь загрузки.');

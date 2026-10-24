@@ -1,3335 +1,1009 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Копилка</title>
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    /* Базовые стили */
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+    /* Макет 1440×1024 при 1rem = 16px. Корневой размер шрифта масштабируется под окно,
+       поэтому все размеры в rem: страница тянется и всегда помещается без прокрутки. */
+    :root {
+      --bg: #EDF1E7;
+      --dark: #252925;
+      --dark-2: #3A4238;
+      --surface: #F8FAF5;
+      --inset: #DDE4D7;
+      --rule: #AEB8A8;
+      --muted: #6B7566;
+      --disabled: #8E9788;
+      --accent: #D9F477;
+      --up: #397E62;
+      --down: #C65A4D;
+      --risk-low: #286B50;
+      --risk-medium: #EAB85A;
+      --risk-high: #A93F37;
+      --sans: 'IBM Plex Sans', system-ui, sans-serif;
+      --mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
     }
 
-    html,
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { font-size: min(100vw / 90, 100vh / 64); }
+
     body {
-      height: 100%;
+      height: 100vh;
       overflow: hidden;
-      font-family: 'Inter', sans-serif;
-      font-size: 100%;
-      background: #F6F8FA;
-    }
-
-    body {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      font-size: 100%;
-    }
-
-    /* Основной контейнер */
-    .page {
-      width: 100%;
-      max-width: 1440px;
-      height: 100%;
-      background: #F6F8FA;
-      display: flex;
-      flex-direction: row;
-      overflow: hidden;
-      position: relative;
-    }
-
-    /* Контентная область */
-    .content {
-      flex: 1;
-      overflow-y: auto;
-    }
-
-    .content:has(#introduction.active),
-    .content:has(#event.active) {
-      overflow-y: hidden;
-    }
-
-    /* Все страницы-секции скрыты по умолчанию */
-    .page-section {
-      display: none;
-      border-radius: 3vh;
-      padding: clamp(8px, 2vh, 20px) clamp(16px, 3vw, 40px) clamp(8px, 2vh, 20px);
-      animation: fadeIn 0.3s ease;
-    }
-
-    /* Делаем видимой ту, у которой есть класс .active */
-    .page-section.active {
       display: flex;
       flex-direction: column;
-      min-height: 100%
-    }
-    
-    #introduction.page-section.active,
-    #event.page-section.active {
-      display: flex;
-      flex-direction: column;
-      padding: 0;
-      min-height: 100%;
+      gap: 1rem;
+      padding: 2rem;
+      background: var(--bg);
+      color: var(--dark);
+      font-family: var(--sans);
+      font-size: 1rem;
+      line-height: 1.5rem;
     }
 
-    /* Анимация появления */
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(8px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    button:disabled { cursor: default; }
 
+    /* Типографика */
+    .t-heading { font-family: var(--sans); font-weight: 500; font-size: 1.25rem; line-height: 1.625rem; }
+    .t-label   { font-family: var(--sans); font-weight: 500; font-size: .875rem; line-height: 1.25rem; }
+    .t-caption { font-family: var(--sans); font-weight: 400; font-size: .75rem; line-height: 1rem; }
+    .m-value   { font-family: var(--mono); font-weight: 400; font-size: 2rem; line-height: 2.5rem; }
+    .m-metric  { font-family: var(--mono); font-weight: 400; font-size: 1.5rem; line-height: 2rem; }
+    .m-price   { font-family: var(--mono); font-weight: 400; font-size: 1.25rem; line-height: 1.75rem; }
+    .m-body    { font-family: var(--mono); font-weight: 400; font-size: 1rem; line-height: 1.5rem; }
+    .m-control { font-family: var(--mono); font-weight: 500; font-size: .875rem; line-height: 1.25rem; }
+    .m-caption { font-family: var(--mono); font-weight: 400; font-size: .75rem; line-height: 1rem; }
+
+    .up { color: var(--up); }
+    .down { color: var(--down); }
+    .flat { color: var(--muted); }
+    .nowrap { white-space: nowrap; }
+
+    /* ===== Шапка ===== */
     .header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(6px, 1vh, 16px) clamp(10px, 1.5vw, 20px);
-      flex-shrink: 0;
-    }
-
-    .header-left {
-      display: flex;
-      align-items: flex-end;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .header-left img {
-      height: clamp(22px, 2.8vw, 36px);
-      width: auto;
-      display: block;
-    }
-
-    .kopilka-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #0D4F35;
-      letter-spacing: -0.5px;
-    }
-
-    .nav-profile {
-      background: #144733;
-      border-radius: 29.5px;
-      padding: clamp(8px, 1vh, 12px) clamp(20px, 2.5vw, 32px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #FFFFFF;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-    .nav-profile:hover {
-      background: #1f5f45;
-    }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .back-btn {
-      background: #FFFCF7;
-      border-radius: 29.5px;
-      padding: clamp(6px, 0.8vh, 12px) clamp(14px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-    }
-    .back-btn:hover {
-      background: #f0ede6;
-    }
-
-    /* ── герой ── */
-    .hero-row {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: flex-start;
-      gap: clamp(10px, 2vw, 20px);
-      flex-shrink: 0;
-      margin: clamp(4px, 0.8vh, 12px) 0 clamp(8px, 1.5vh, 28px);
-    }
-
-    .hero-left {
-      flex: 1;
-      min-width: 200px;
-    }
-
-    .main-headline {
-      font-weight: 800;
-      font-size: 175%;
-      line-height: 1.1;
-      color: #144733;
-    }
-
-    .subhead {
-      font-weight: 400;
-      font-size: 87.5%;
-      color: #6E7870;
-      margin-top: clamp(6px, 0.8vh, 12px);
-      max-width: 650px;
-    }
-
-    .hero-actions {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: clamp(10px, 1.5vw, 20px);
-      margin-top: clamp(16px, 2vh, 32px);
-    }
-
-    .kopilka-btn {
-      background: #144733;
-      border-radius: 14px;
-      padding: clamp(12px, 1.5vh, 20px) clamp(28px, 3vw, 44px);
-      border: none;
-      font-weight: 600;
-      font-size: 100%;
-      color: #ffffff;
-      cursor: pointer;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-    .kopilka-btn:hover {
-      background: #1a5a47;
-    }
-    .kopilka-btn[aria-pressed="true"] {
-      background: #0d2e20; /* темнее */
-    }
-
-    .info-badge {
-      background: #FFFCF7;
-      border-radius: 30px;
-      padding: clamp(8px, 1vh, 14px) clamp(16px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      white-space: nowrap;
-    }
-
-    /* ── основной контент (сетка) ── */
-    .entrance-main-content {
+      flex: none;
+      height: 6.25rem;
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(16px, 2.5vw, 36px);
-      min-height: 0;
+      grid-template-columns: 170fr 190fr 250fr 310fr 130fr 214fr;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem;
+      background: var(--dark);
+      border-radius: 1rem;
+      color: var(--surface);
     }
 
-    /* ── левая колонка: "Как это работает" ── */
-    .how-it-works {
-      background: #FFFCF7;
-      border-radius: clamp(20px, 2.5vh, 30px);
-      padding: clamp(20px, 2.5vh, 40px) clamp(20px, 2.5vw, 40px);
+    .brand { display: flex; align-items: center; gap: .5rem; }
+    .brand img { width: 2.625rem; height: 2.4375rem; }
+
+    .free-money { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+    .free-money .t-caption, .rating .t-caption { color: var(--inset); }
+
+    .capital { display: flex; flex-direction: column; align-items: center; gap: .25rem; }
+
+    .switch {
       display: flex;
-      flex-direction: column;
-      overflow: hidden;
+      gap: .25rem;
+      background: var(--dark-2);
+      border-radius: .5rem;
     }
-
-    .how-it-works .title {
-      font-weight: 800;
-      font-size: 137.5%;
-      color: #144733;
-      flex-shrink: 0;
-    }
-
-    .steps {
-      display: flex;
-      flex-direction: column;
-      gap: clamp(16px, 2vh, 28px);
+    .switch button {
       flex: 1;
-      justify-content: center;
+      height: 1.5rem;
+      padding: .125rem .25rem .25rem;
+      border-radius: .5rem;
+      color: var(--surface);
     }
+    .switch button.is-active { background: var(--accent); color: var(--dark); }
+    .capital .switch { width: 100%; max-width: 13.25rem; }
 
-    .step .step-title {
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #144733;
-    }
-
-    .step .step-desc {
-      font-weight: 400;
-      font-size: 87.5%;
-      color: #6F7890;
-    }
-
-    /* ── правая колонка: капитал ── */
-    .capital-card {
-      background: #144733;
-      border-radius: clamp(20px, 2.5vh, 36px);
-      padding: clamp(24px, 3vh, 44px) clamp(24px, 3vw, 50px);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .capital-card .label {
-      font-weight: 600;
-      font-size: 75%;
-      color: #B3C7BD;
-      letter-spacing: 0.3px;
-    }
-
-    .capital-card .amount {
-      font-weight: 800;
-      font-size: 200%;
-      line-height: 1.1;
-      color: #ffffff;
-      margin-top: clamp(4px, 0.5vh, 10px);
-    }
-
-    .capital-card .growth {
-      font-weight: 600;
-      font-size: 100%;
-      color: #C7F26B;
-      margin-top: clamp(2px, 0.3vh, 8px);
-    }
-
-    .histogram {
-      display: flex;
-      align-items: flex-end;
-      gap: clamp(6px, 1vw, 16px);
-      padding-top: clamp(12px, 2vh, 28px);
-      min-height: 80px;
+    .month { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+    .month__title { color: var(--inset); white-space: pre; }
+    .month__days { display: flex; gap: .125rem; height: 1rem; align-items: center; }
+    .month__day {
       flex: 1;
+      height: .625rem;
+      border: .03125rem solid var(--inset);
+      border-radius: .125rem;
     }
+    .month__day.is-done { background: var(--accent); border-color: var(--accent); }
+    .month__paydays { position: relative; height: 1.375rem; color: var(--inset); }
+    .payday { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: .0625rem; }
+    .payday::before { content: ''; width: .125rem; height: .25rem; background: var(--surface); }
 
-    .entrance-bar {
-      flex: 1;
-      background: #C7F26B;
-      border-radius: 8.99px;
-      min-height: 12px;
-      transition: height 0.3s;
-    }
+    .rating { display: flex; flex-direction: column; align-items: center; gap: .25rem; white-space: pre; }
+    .rating.is-hidden { visibility: hidden; }
 
-    .entrance-bar--1 { height: 15%; }
-    .entrance-bar--2 { height: 28%; }
-    .entrance-bar--3 { height: 22%; }
-    .entrance-bar--4 { height: 36%; }
-    .entrance-bar--5 { height: 32%; }
-    .entrance-bar--6 { height: 42%; }
-    .entrance-bar--7 { height: 50%; }
-    .entrance-bar--8 { height: 64%; }
-
-    /* registration */
-
-    /* ── шапка ── */
-    .header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(6px, 1vh, 16px) clamp(10px, 1.5vw, 20px);
-      flex-shrink: 0;
-    }
-
-    .header-left {
-      display: flex;
-      align-items: flex-end;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .header-left img {
-      height: clamp(22px, 2.8vw, 36px);
-      width: auto;
-      display: block;
-    }
-
-    .kopilka-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #0D4F35;
-      letter-spacing: -0.5px;
-    }
-
-    .nav-profile {
-      background: #144733;
-      border-radius: 29.5px;
-      padding: clamp(8px, 1vh, 12px) clamp(20px, 2.5vw, 32px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #FFFFFF;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-    .nav-profile:hover {
-      background: #1f5f45;
-    }
-
-    .header-right {
+    .profile {
       display: flex;
       align-items: center;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
+      gap: .5rem;
+      padding: .5rem;
+      background: var(--dark-2);
+      border-radius: .75rem;
     }
-
-    .back-btn {
-      background: #FFFCF7;
-      border-radius: 29.5px;
-      padding: clamp(6px, 0.8vh, 12px) clamp(14px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-    }
-    .back-btn:hover {
-      background: #f0ede6;
-    }
-
-    .register-title {
-      font-weight: 700;
-      font-size: 175%;
-      line-height: 1.1;
-      color: #0B1638;
-    }
-
-    .register-subtitle {
-      font-weight: 400;
-      font-size: 87.5%;
-      color: #6F7890;
-      margin-top: clamp(4px, 0.5vh, 8px);
-    }
-
-    /* ── основная карточка регистрации ── */
-    .registration-main-content {
-      flex: 1;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 0;
-    }
-
-    .register-card {
-      width: 100%;
-      max-width: 780px;
-      background: #FFFFFF;
-      border-radius: clamp(20px, 2.5vh, 28px);
-      padding: clamp(30px, 4vh, 60px) clamp(30px, 4vw, 60px);
-      display: flex;
-      flex-direction: column;
-      gap: clamp(16px, 2vh, 28px);
-    }
-
-    .input-label {
-      font-weight: 600;
-      font-size: 100%;
-      color: #6F7890;
-    }
-
-    .input-field {
-      width: 100%;
-      height: clamp(52px, 6vh, 68px);
-      background: #F5F7F2;
-      border-radius: 14px;
-      border: none;
-      padding: 0 clamp(18px, 2vw, 25px);
-      font-family: 'Inter', sans-serif;
-      font-weight: 400;
-      font-size: 112.5%;
-      color: #18213A;
-      outline: none;
-      transition: border 0.2s, background 0.2s;
-    }
-    .input-field::placeholder {
-      color: #18213A;
-      opacity: 0.6;
-    }
-    .input-field:focus {
-      border: 2px solid #144733;
-      background: #FFFFFF;
-    }
-
-    .btn-continue {
-      width: 100%;
-      height: clamp(52px, 6vh, 68px);
-      background: #144733;
-      border-radius: 14px;
-      border: none;
-      font-family: 'Inter', sans-serif;
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #FFFFFF;
-      cursor: pointer;
-      transition: background 0.2s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .btn-continue:hover {
-      background: #1a5a47;
-    }
-
-    .input-hint {
-      font-weight: 400;
-      font-size: 87.5%;
-      color: #6F7890;
-      text-align: center;
-    }
-
-    /* portfolio */
-    /* ── шапка ── */
-    .header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(6px, 1vh, 16px) clamp(10px, 1.5vw, 20px);
-      flex-shrink: 0;
-    }
-
-    .header-left {
-      display: flex;
-      align-items: flex-end;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .header-left img {
-      height: clamp(22px, 2.8vw, 36px);
-      width: auto;
-      display: block;
-    }
-
-    .kopilka-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #0D4F35;
-      letter-spacing: -0.5px;
-    }
-
-    .nav-profile {
-      background: #144733;
-      border-radius: 29.5px;
-      padding: clamp(8px, 1vh, 12px) clamp(20px, 2.5vw, 32px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #FFFFFF;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-    .nav-profile:hover {
-      background: #1f5f45;
-    }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .back-btn {
-      background: #FFFCF7;
-      border-radius: 29.5px;
-      padding: clamp(6px, 0.8vh, 12px) clamp(14px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-    }
-    .back-btn:hover {
-      background: #f0ede6;
-    }
-
-
-    .day-badge {
-      background: #C7F26B;
-      border-radius: 28px;
-      padding: clamp(4px, 0.6vh, 10px) clamp(16px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #144733;
-      white-space: nowrap;
-    }
-
-    .portfolio-title {
-      font-weight: 800;
-      font-size: 150%;
-      line-height: 1.1;
-      color: #144733;
-    }
-
-    /* ── левая колонка ── */
-    .left-column {
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-
-    /* ── карточки статистики ── */
-    .stats-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: clamp(12px, 1.5vw, 20px);
-      flex-shrink: 0;
-      margin-bottom: clamp(10px, 1.5vh, 20px);
-    }
-
-    .stat-card {
-      background: #FFFCF7;
-      border-radius: clamp(16px, 2vh, 22px);
-      padding: clamp(16px, 2vh, 24px) clamp(20px, 2vw, 28px);
-      min-width: clamp(140px, 15vw, 250px);
-      flex: 0 1 auto;
-    }
-    .stat-card .label {
-      font-weight: 400;
-      font-size: 75%;
-      color: #6E7870;
-    }
-    .stat-card .value {
-      font-weight: 800;
-      font-size: 125%;
-      color: #144733;
-      margin-top: clamp(6px, 0.8vh, 12px);
-    }
-
-    /* ── основной контент (сетка) ── */
-    .portfolio-main-content {
-      flex: 1;
+    .avatar {
+      flex: none;
+      width: 1.75rem;
+      height: 1.75rem;
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(16px, 2.5vw, 36px);
-      min-height: 0;
-    }
-
-    /* ── левая колонка: таблица портфеля ── */
-    .portfolio-table {
-      background: #FFFFFF;
-      border-radius: clamp(18px, 2.5vh, 26px);
-      padding: clamp(20px, 2.5vh, 32px) clamp(20px, 2.5vw, 32px);
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-height: 0;
-    }
-
-    .table-title {
-      font-weight: 800;
-      font-size: 112.5%;
-      color: #144733;
-      flex-shrink: 0;
-      margin-bottom: clamp(16px, 2vh, 28px);
-    }
-
-    .asset-list {
-      flex: 1;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: clamp(6px, 0.8vh, 12px);
-      padding-right: 4px;
-    }
-
-    /* Стилизация скроллбара для asset-list */
-    .asset-list::-webkit-scrollbar {
-      width: 4px;
-    }
-    .asset-list::-webkit-scrollbar-track {
-      background: #f0f0f0;
-      border-radius: 4px;
-    }
-    .asset-list::-webkit-scrollbar-thumb {
-      background: #C7F26B;
-      border-radius: 4px;
-    }
-
-    .asset-row {
-      display: flex;
-      align-items: center;
-      gap: clamp(8px, 1vw, 16px);
-      min-height: clamp(32px, 4vh, 42px);
-      flex-shrink: 0;
-    }
-
-    .asset-name {
-      background: #FFFCF7;
-      border-radius: 19px;
-      padding: 0 clamp(12px, 1.2vw, 18px);
-      height: clamp(30px, 3.5vh, 38px);
-      display: flex;
-      align-items: center;
-      font-weight: 600;
-      font-size: 68.75%;
-      color: #1A241C;
-      flex-shrink: 0;
-      min-width: clamp(100px, 12vw, 180px);
-    }
-    .asset-name.inactive {
-      color: #9EAA97;
-    }
-
-    .asset-value {
-      font-weight: 600;
-      font-size: 81.25%;
-      color: #1A241C;
-      flex-shrink: 0;
-      min-width: clamp(70px, 8vw, 120px);
-      text-align: right;
-    }
-    .asset-value.inactive {
-      color: #9EAA97;
-    }
-
-    .asset-bar {
-      flex: 1;
-      height: clamp(10px, 1.2vh, 14px);
-      background: #DEE3DB;
-      border-radius: 7px;
-      overflow: hidden;
-      min-width: 60px;
-    }
-    .asset-bar .fill {
-      height: 100%;
-      border-radius: 7px;
-      width: 0%;
-    }
-
-    .fill-green { background: #C7F26B; }
-    .fill-dark { background: #144733; }
-    .fill-mint { background: #7AA88C; }
-    .fill-gold { background: #F2B84A; }
-    .fill-sand { background: #D9BA6B; }
-    .fill-blue { background: #6B71D9; }
-    .fill-purple { background: #CF5FE0; }
-    .fill-teal { background: #62B86C; }
-
-    /* ── правая колонка ── */
-    .right-panel {
-      display: flex;
-      flex-direction: column;
-      gap: clamp(10px, 1.5vh, 18px);
-      min-height: 0;
-    }
-
-    /* панель действий */
-    .actions-panel {
-      background: #144733;
-      border-radius: clamp(18px, 2.5vh, 26px);
-      padding: clamp(20px, 2.5vh, 32px) clamp(20px, 2.5vw, 32px);
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-
-    .actions-title {
-      font-weight: 800;
-      font-size: 125%;
-      color: #FFFFFF;
-      flex-shrink: 0;
-      margin-bottom: clamp(14px, 1.8vh, 24px);
-    }
-
-    .actions-list {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: clamp(10px, 1.2vh, 18px);
-      overflow-y: auto;
-      padding-right: 4px;
-    }
-
-    /* Стилизация скроллбара для actions-list */
-    .actions-list::-webkit-scrollbar {
-      width: 4px;
-    }
-    .actions-list::-webkit-scrollbar-track {
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 4px;
-    }
-    .actions-list::-webkit-scrollbar-thumb {
-      background: #C7F26B;
-      border-radius: 4px;
-    }
-
-    .action-item {
-      background: #265C42;
-      border-radius: 18px;
-      padding: clamp(12px, 1.5vh, 18px) clamp(18px, 2vw, 24px);
-      cursor: pointer;
-      transition: background 0.2s;
-      flex-shrink: 0;
-    }
-    .action-item:hover {
-      background: #2f6d4f;
-    }
-
-    .action-item .title {
-      font-weight: 600;
-      font-size: 93.75%;
-      color: #FFFFFF;
-    }
-    .action-item .desc {
-      font-weight: 400;
-      font-size: 68.75%;
-      color: #B8C9BF;
-      margin-top: clamp(2px, 0.3vh, 6px);
-    }
-
-    /* кнопка "Завершить месяц" */
-    .btn-finish {
-      background: #C7F26B;
-      border-radius: 19px;
-      border: none;
-      padding: clamp(10px, 1.2vh, 14px) clamp(20px, 2.5vw, 32px);
-      font-family: 'Inter', sans-serif;
-      font-weight: 600;
-      font-size: 100%;
-      color: #144733;
-      cursor: pointer;
-      transition: background 0.2s;
-      flex-shrink: 0;
-      width: 100%;
-    }
-    .btn-finish:hover {
-      background: #b8e35f;
-    }
-
-
-    /* trade */
-        .header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(6px, 1vh, 16px) clamp(10px, 1.5vw, 20px);
-      flex-shrink: 0;
-    }
-
-    .header-left {
-      display: flex;
-      align-items: flex-end;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .header-left img {
-      height: clamp(22px, 2.8vw, 36px);
-      width: auto;
-      display: block;
-    }
-
-    .kopilka-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #0D4F35;
-      letter-spacing: -0.5px;
-    }
-
-    .nav-profile {
-      background: #144733;
-      border-radius: 29.5px;
-      padding: clamp(8px, 1vh, 12px) clamp(20px, 2.5vw, 32px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #FFFFFF;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-    .nav-profile:hover {
-      background: #1f5f45;
-    }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .back-btn {
-      background: #FFFCF7;
-      border-radius: 29.5px;
-      padding: clamp(6px, 0.8vh, 12px) clamp(14px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-    }
-    .back-btn:hover {
-      background: #f0ede6;
-    }
-
-    .main-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #144733;
-    }
-
-    .sub-title {
-      font-weight: 400;
-      font-size: 87.5%;
-      color: #6E7870;
-    }
-
-    /* ── основной контент (сетка) ── */
-    .trade-main-content {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      gap: clamp(8px, 1.2vh, 18px);
-    }
-
-    .content-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(12px, 2vw, 28px);
-      flex: 1;
-      min-height: 0;
-    }
-
-    /* ── левая панель (выбор актива) ── */
-    .assets-panel {
-      background: #FFFFFF;
-      border: 1px solid #D1EDD6;
-      border-radius: clamp(16px, 2vh, 24px);
-      padding: clamp(14px, 2vh, 28px) clamp(16px, 2vw, 28px);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .assets-title {
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #0D4F35;
-      flex-shrink: 0;
-    }
-
-    .assets-sub {
-      font-weight: 400;
-      font-size: 75%;
-      color: #4D6E57;
-      margin-bottom: clamp(8px, 1.2vh, 18px);
-      flex-shrink: 0;
-    }
-
-    .asset-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(8px, 1vh, 14px);
-      flex: 1;
-      align-content: start;
-    }
-
-    .asset-card {
-      border-radius: 18px;
-      padding: clamp(12px, 1.4vh, 20px) clamp(14px, 1.6vw, 20px);
-      cursor: pointer;
-      transition: all 0.2s;
-      position: relative;
-      border: 1px solid transparent;
-      min-height: clamp(60px, 7vh, 110px);
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      background: rgba(240, 250, 237);
-    }
-    .asset-card.active {
-      background: #D1EDD6;
-      border-color: #4AA670;
-    }
-    .asset-card.inactive {
-      background: rgba(240, 250, 237, 0.2);
-      border-color: transparent;
-    }
-    .asset-card.inactive:hover {
-      background: rgba(240, 250, 237, 0.5);
-    }
-
-    .asset-card .name {
-      font-weight: 700;
-      font-size: 87.5%;
-      color: #0D4F35;
-    }
-    .asset-card .name.faded {
-      color: rgba(13, 79, 53, 0.2);
-    }
-    .asset-card .desc {
-      font-weight: 400;
-      font-size: 68.75%;
-      color: #4D6E57;
-      margin-top: 2px;
-    }
-    .asset-card .desc.faded {
-      color: rgba(77, 110, 87, 0.2);
-    }
-    .asset-card .arrow {
-      position: absolute;
-      right: clamp(12px, 1.2vw, 20px);
-      top: 50%;
-      transform: translateY(-50%);
-      font-weight: 700;
-      font-size: 100%;
-      color: #4AA670;
-    }
-    .asset-card .arrow.faded {
-      color: rgba(74, 166, 112, 0.2);
-    }
-
-    /* ── правая панель (детали) ── */
-    .right-panel {
-      display: flex;
-      flex-direction: column;
-      gap: clamp(8px, 1.2vh, 18px);
-      min-height: 0;
-    }
-
-    /* карточка выбора (облигации, акции, ПИФ) */
-    .selection-card {
-      background: #0D4F35;
-      border-radius: clamp(16px, 2vh, 24px);
-      padding: clamp(14px, 2vh, 28px) clamp(16px, 2vw, 28px);
-      flex-shrink: 0;
-      display: none;
-    }
-    .selection-card.visible {
-      display: block;
-    }
-
-    .selection-card .title {
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #FFFFFF;
-    }
-    .selection-card .sub {
-      font-weight: 600;
-      font-size: 75%;
-      color: #D1EDD6;
-      margin: 4px 0 clamp(8px, 1vh, 14px);
-    }
-
-    .selection-item {
-      width: 100%;
-      height: clamp(38px, 4vh, 46px);
-      border-radius: 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 clamp(12px, 1.2vw, 18px);
-      margin-bottom: 6px;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .selection-item.active {
-      background: #C7F26B;
-    }
-    .selection-item.inactive {
-      background: #175E40;
-    }
-    .selection-item.inactive:hover {
-      background: #1f7a54;
-    }
-
-    .selection-item .name {
-      font-weight: 700;
-      font-size: 81.25%;
-    }
-    .selection-item.active .name {
-      color: #0D4F35;
-    }
-    .selection-item.inactive .name {
-      color: #FFFFFF;
-    }
-
-    .selection-item .price {
-      font-weight: 600;
-      font-size: 68.75%;
-    }
-    .selection-item.active .price {
-      color: #0D4F35;
-    }
-    .selection-item.inactive .price {
-      color: #D1EDD6;
-    }
-
-    /* карточка информации (счёт, валюта, золото) */
-    .asset-info-card {
-      background: #0D4F35;
-      border-radius: clamp(16px, 2vh, 24px);
-      padding: clamp(14px, 2vh, 24px) clamp(16px, 2vw, 28px);
-      flex-shrink: 0;
-      display: none;
-    }
-    .asset-info-card.visible {
-      display: block;
-    }
-
-    .asset-info-card .title {
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #FFFFFF;
-    }
-
-    .asset-info-card .info-row {
-      width: 100%;
-      height: clamp(38px, 4vh, 46px);
-      background: #C7F26B;
-      border-radius: 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 clamp(12px, 1.2vw, 18px);
-      margin-top: clamp(6px, 0.8vh, 12px);
-    }
-    .asset-info-card .info-row .label {
-      font-weight: 700;
-      font-size: 81.25%;
-      color: #0D4F35;
-    }
-    .asset-info-card .info-row .value {
-      font-weight: 600;
-      font-size: 75%;
-      color: #0D4F35;
-    }
-
-    /* панель сделки */
-    .deal-panel {
-      background: #FFFFFF;
-      border: 1px solid #D1EDD6;
-      border-radius: clamp(16px, 2vh, 24px);
-      padding: clamp(14px, 2vh, 28px) clamp(16px, 2vw, 28px);
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      overflow: hidden;
-    }
-
-    .deal-title {
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #0D4F35;
-      flex-shrink: 0;
-    }
-
-    .deal-label {
-      font-weight: 600;
-      font-size: 68.75%;
-      color: #4D6E57;
-      margin-top: clamp(4px, 0.5vh, 8px);
-      flex-shrink: 0;
-    }
-
-    .deal-asset-name {
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #0D4F35;
-      flex-shrink: 0;
-      margin-bottom: clamp(4px, 0.5vh, 8px);
-    }
-
-    .deal-row {
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: clamp(8px, 1vw, 16px);
-      flex-shrink: 0;
-      flex-wrap: wrap;
-      margin-bottom: clamp(4px, 0.5vh, 8px);
-    }
-
-    .deal-left {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-width: 140px;
-    }
-    .deal-left .label {
-      font-weight: 600;
-      font-size: 68.75%;
-      color: #4D6E57;
-      margin-bottom: 4px;
-    }
-
-    .deal-input-wrapper {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 4px;
-    }
-    .deal-input {
-      height: clamp(40px, 4.5vh, 52px);
-      background: #F0FAED;
-      border: 1px solid #D1EDD6;
-      border-radius: 14px;
-      padding: 0 clamp(10px, 1vw, 16px);
-      font-family: 'Inter', sans-serif;
-      font-weight: 700;
-      font-size: 100%;
-      color: #0D4F35;
-      outline: none;
-      width: clamp(120px, 12vw, 190px);
-      flex-shrink: 0;
-    }
-    .deal-input:focus {
-      border-color: #4AA670;
-    }
-    .deal-input-unit {
-      font-weight: 400;
-      font-size: 81.25%;
-      color: #4D6E57;
-    }
-
-    .deal-right {
-      text-align: right;
-      flex-shrink: 0;
-    }
-    .deal-right .label {
-      font-weight: 600;
-      font-size: 68.75%;
-      color: #4D6E57;
-    }
-    .deal-right .amount {
-      font-weight: 800;
-      font-size: 125%;
-      color: #0D4F35;
-    }
-
-    .deal-buttons {
-      display: flex;
-      gap: clamp(8px, 1vw, 12px);
-      flex-shrink: 0;
-      flex-wrap: wrap;
-      margin-top: clamp(4px, 0.5vh, 8px);
-    }
-
-    .btn-buy {
-        flex: 1;
-        min-width: 100px;
-        height: clamp(44px, 5vh, 55px);
-        background: #0D4F35;
-        border-radius: 17px;
-        border: none;
-        font-weight: 700;
-        font-size: 100%;
-        color: #FFFFFF;
-        cursor: pointer;
-        /* Плавный возврат в исходное состояние */
-        transition: background 0.2s, transform 0.15s ease-out; 
-        will-change: transform;
-    }
-    .btn-buy:hover {
-        background: #1a6a4a;
-    }
-    .btn-buy:active {
-        background: #0a3d29;
-        /* Кнопка сжимается при клике благодаря transition */
-        transform: scale(0.94); 
-    }
-    .btn-buy:disabled {
-        background: #9aa8a2;
-        cursor: not-allowed;
-        transform: none; /* Отменяем эффект для заблокированной кнопки */
-    }
-    /* ====== Анимация «отказа» ====== */
-    .btn-buy.shake {
-        animation: shake 0.5s ease-in-out;
-    }
-    @keyframes shake {
-        0%   { transform: translateX(0)    rotate(0); }
-        15%  { transform: translateX(-8px) rotate(-2deg); }
-        30%  { transform: translateX(8px)  rotate(2deg); }
-        45%  { transform: translateX(-8px) rotate(-2deg); }
-        60%  { transform: translateX(8px)  rotate(2deg); }
-        80%  { transform: translateX(-4px) rotate(-1deg); }
-        100% { transform: translateX(0)    rotate(0); }
-    }
-    /* ====== Уведомление ====== */
-    .toast {
-        position: fixed;
-        left: 50%;
-        /* 1. Переносим наверх (с отступом 30px от верхнего края экрана) */
-        top: 30px; 
-        
-        /* 2. Изменяем начальное смещение: теперь при появлении тост будет плавно опускаться сверху вниз (из -20px в 0) */
-        transform: translateX(-50%) translateY(-20px);
-        
-        background: #222;
-        color: #fff;
-        padding: 0.85em 1.4em; /* Использование em здесь позволит внутренним отступам пропорционально масштабироваться вместе со шрифтом */
-        border-radius: 12px;
-        
-        /* 3. Размер шрифта теперь на 100% зависит от размера шрифта родителя */
-        font-size: 1em; 
-        
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.3s, transform 0.3s;
-        z-index: 1000;
-    }
-
-    .toast.show {
-        opacity: 1;
-        /* Возвращаем в исходную точку */
-        transform: translateX(-50%) translateY(0);
-    }
-
-    .toast.error {
-        background: #c0392b;
-    }
-
-    .toast.success {
-        background: #0D4F35;
-    }
-
-    .btn-sell {
-      flex: 1;
-      min-width: 100px;
-      height: clamp(44px, 5vh, 55px);
-      background: #E0F2E0;
-      border: 1px solid #4AA670;
-      border-radius: 17px;
-      font-weight: 700;
-      font-size: 100%;
-      color: #0D4F35;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .btn-sell:hover {
-      background: #c8e8c8;
-    }
-
-    .deal-available {
-      font-weight: 400;
-      font-size: 150%;
-      color: #4D6E57;
-      margin-top: clamp(6px, 0.8vh, 14px);
-      flex-shrink: 0;
-    }
-
-    /* ── переключатель Купить/Продать ── */
-    .toggle-switch {
-      display: flex;
-      background: #FFFFFF;
-      border: 1px solid #D1EDD6;
-      border-radius: 22px;
-      padding: 4px;
-      flex-shrink: 0;
-      width: 100%;
-      max-width: 440px;
-      cursor: pointer;
-    }
-    .toggle-switch .option {
-      flex: 1;
-      height: clamp(40px, 4.5vh, 50px);
-      border-radius: 18px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      font-size: 100%;
-      transition: all 0.3s;
-      cursor: pointer;
-      user-select: none;
-    }
-    .toggle-switch .option.active {
-      background: #0D4F35;
-      color: #FFFFFF;
-    }
-    .toggle-switch .option.inactive {
-      background: transparent;
-      color: #0D4F35;
-    }
-    .toggle-switch .option.inactive:hover {
-      background: #f0f5ee;
-    }
-
-    /* teaching */
-    .header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(6px, 1vh, 16px) clamp(10px, 1.5vw, 20px);
-      flex-shrink: 0;
-    }
-
-    .header-left {
-      display: flex;
-      align-items: flex-end;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .header-left img {
-      height: clamp(22px, 2.8vw, 36px);
-      width: auto;
-      display: block;
-    }
-
-    .kopilka-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #0D4F35;
-      letter-spacing: -0.5px;
-    }
-
-    .nav-profile {
-      background: #144733;
-      border-radius: 29.5px;
-      padding: 12px 32px;
-      font-weight: 600;
-      font-size: 125%;
-      color: #FFFFFF;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-    .nav-profile:hover {
-      background: #1f5f45;
-    }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .back-btn {
-      background: #FFFCF7;
-      border-radius: 29.5px;
-      padding: clamp(6px, 0.8vh, 12px) clamp(14px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-    }
-    .back-btn:hover {
-      background: #f0ede6;
-    }
-
-    .main-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #144733;
-    }
-
-    .sub-title {
-      font-weight: 400;
-      font-size: 87.5%;
-      color: #6E7870;
-    }
-
-    .example-trigger {
-      display: flex;
-      align-items: center;
-      gap: clamp(6px, 1vw, 12px);
-      flex-shrink: 0;
-      position: relative;
-    }
-
-    .question-circle {
-      width: clamp(38px, 4vw, 58px);
-      height: clamp(38px, 4vw, 58px);
-      background: #C7F26B;
+      place-items: center;
       border-radius: 50%;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: transform 0.2s;
-      font-weight: 800;
-      font-size: 125%;
-      color: #144733;
-      box-shadow: 0 4px 12px rgba(199, 242, 107, 0.3);
-      flex-shrink: 0;
-      position: relative;
-      z-index: 2;
-    }
-    .question-circle:hover {
-      transform: scale(1.2);
+      background: var(--inset);
+      color: var(--dark);
     }
 
-    .hint-message {
-      visibility: hidden;
-      opacity: 0;
-      transition: opacity 0.3s ease, visibility 0.3s ease;
-      position: absolute;
-      left: calc(100% + 12px);
-      top: 50%;
-      transform: translateY(-50%);
-      background: #1a1a2e;
-      color: #fff;
-      padding: 6px 14px;
-      border-radius: 10px;
-      font-size: 75%;
-      white-space: nowrap;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
-      z-index: 2;
+    .header .dimmable { transition: opacity .2s; }
+    body.is-learning .header .dimmable { opacity: .4; }
+
+    /* ===== Основная область ===== */
+    .main {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1fr 17.5rem;
+      gap: 1.5rem;
     }
-    .hint-message::before {
+    body.is-learning .main { grid-template-columns: 1fr; }
+    body.is-learning .info { display: none; }
+
+    .panel {
+      min-height: 0;
+      padding: .75rem;
+      background: var(--inset);
+      border-radius: 2.25rem;
+      box-shadow: inset -1px -1px 1px rgba(255, 255, 255, .8), inset 3px 3px 2.6px #9AA392;
+    }
+
+    .field {
+      height: 100%;
+      display: grid;
+      grid-template-rows: repeat(3, minmax(0, 1fr));
+      gap: .75rem;
+    }
+    body.is-learning .field { display: none; }
+
+    .field__row { display: flex; gap: .75rem; min-height: 0; }
+
+    .raised {
+      background: var(--surface);
+      border-radius: 1.5rem;
+      box-shadow: 2px 3px 3.1px #8E9488;
+    }
+
+    /* Категория */
+    .category { display: flex; flex-direction: column; min-width: 0; }
+    .category__title { display: flex; align-items: center; padding: 1rem 1rem 0; }
+    .category__title span { flex: 1; }
+    .help {
+      width: 1.25rem;
+      height: 1.25rem;
+      border-radius: 50%;
+      color: var(--muted);
+      transition: background .15s, color .15s;
+    }
+    .help:hover { background: var(--inset); }
+    .help:active { background: var(--dark); color: var(--surface); }
+    .category__body { flex: 1; min-height: 0; display: flex; }
+    .vsep { flex: none; width: 1px; margin: 1rem 0; background: var(--rule); }
+
+    /* Инструмент */
+    .instrument {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: .25rem;
+      padding: 1rem;
+    }
+    .quote { display: flex; justify-content: space-between; align-items: center; gap: .25rem; white-space: nowrap; }
+    .terms { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .25rem; padding-bottom: .5rem; }
+    .chart { flex: 1; min-height: .75rem; width: 100%; display: block; overflow: visible; }
+
+    .ownership { display: flex; justify-content: space-between; align-items: flex-end; gap: .5rem; white-space: nowrap; }
+    .ownership .t-caption { color: var(--muted); display: block; }
+    .metric { display: flex; align-items: center; gap: .25rem; }
+    .metric-switch {
+      width: 1.5rem;
+      height: 1.5rem;
+      display: grid;
+      place-items: center;
+      background: var(--inset);
+      border-radius: .5rem;
+    }
+    .metric-switch:hover { background: var(--accent); }
+    .metric-switch img { width: 1rem; height: 1rem; padding: .125rem; }
+    .metric-switch { position: relative; }
+    .metric-switch::after {
+      content: attr(data-hint);
+      position: absolute;
+      right: -.25rem;
+      bottom: calc(100% + .25rem);
+      padding: .25rem .5rem;
+      background: var(--dark);
+      border-radius: .5rem;
+      color: var(--surface);
+      font-family: var(--sans);
+      font-size: .75rem;
+      line-height: 1rem;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .15s;
+    }
+    .metric-switch:hover::after { opacity: 1; }
+
+    .trade { display: flex; flex-direction: column; gap: .5rem; }
+
+    .qty {
+      display: flex;
+      gap: .25rem;
+      height: 1.25rem;
+      padding: 0 .125rem;
+      background: var(--inset);
+      border-radius: .5rem;
+    }
+    .qty button { flex: 1; height: 1.25rem; border-radius: .5rem; }
+    .qty button.is-active { background: var(--accent); }
+
+    .actions { display: flex; gap: .25rem; }
+    .btn {
+      flex: 1;
+      height: 1.75rem;
+      padding: .25rem;
+      border-radius: .5rem;
+      border: 1px solid var(--rule);
+    }
+    /* Компонент Button. Secondary: обводка, Primary (--dark): заливка без обводки */
+    .btn:hover { background: var(--inset); }
+    .btn:active { background: #000000; }
+    .btn--dark { background: var(--dark); border: 0; color: var(--surface); }
+    .btn--dark:hover { background: var(--dark-2); }
+    .btn--dark:active { background: #1A1E1A; }
+    .btn:disabled { background: var(--inset); border: 1px solid var(--rule); color: var(--disabled); }
+
+    .savings-result { display: flex; justify-content: space-between; align-items: center; }
+
+    /* Полный дефолт: инструмент отключён, плашка в стиле Risk label (высокий риск) */
+    .default-badge {
+      padding: .25rem .75rem;
+      background: var(--risk-high);
+      border-radius: .125rem;
+      color: var(--surface);
+      text-transform: uppercase;
+    }
+    .default-badge[hidden] { display: none; }
+    .instrument.is-defaulted .terms,
+    .instrument.is-defaulted .ownership,
+    .instrument.is-defaulted .trade { opacity: .4; }
+
+    /* Закрытая категория: locked — замок, unlock — кнопка открытия */
+    .category--closed {
+      background: var(--inset);
+      border-radius: 1.5rem;
+      box-shadow: inset -1px -1px 1px rgba(255, 255, 255, .52), inset 3px 3px 2.6px rgba(154, 163, 146, .65);
+    }
+    .category--closed .category__title { justify-content: center; }
+    .category--closed .category__title span { flex: none; }
+    .category--locked .category__title { color: var(--muted); }
+    .access { flex: 1; min-height: 0; display: grid; place-items: center; }
+    .access > svg { width: 3.5rem; height: 3.5rem; }
+    .unlock-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: .5rem;
+      width: 9.5rem;
+      height: 2.75rem;
+      background: var(--accent);
+      border-radius: .75rem;
+      color: var(--dark);
+    }
+    /* Компонент Category / Unlock button */
+    .unlock-btn:hover { background: rgba(0, 0, 0, .76); }
+    .unlock-btn:active { background: var(--dark-2); color: var(--surface); }
+    .unlock-btn svg { width: 1.25rem; height: 1.25rem; }
+
+    /* ===== Правая колонка ===== */
+    .info { min-height: 0; display: flex; flex-direction: column; gap: 1.25rem; }
+    .market { flex: none; display: flex; flex-direction: column; gap: .5rem; }
+    .market__title { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem; }
+    .chart.market__plot { flex: none; height: 8.125rem; }
+    .market__timeline { display: flex; justify-content: space-between; color: var(--muted); white-space: pre; }
+
+    .news { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1rem; }
+    .news__list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; scrollbar-width: none; }
+    .news__item { display: flex; flex-direction: column; gap: .5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--rule); }
+    .news__item .m-caption { color: var(--muted); }
+    .news__item p { padding-right: 1.625rem; color: var(--muted); font-size: .875rem; line-height: 1.25rem; }
+
+    /* ===== Обучение ===== */
+    .learn {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      padding: 2rem;
+      animation: appear .25s ease-out;
+    }
+    .learn[hidden] { display: none; }
+    @keyframes appear { from { opacity: 0; transform: scale(.985); } }
+
+    .learn__head { display: flex; flex-direction: column; gap: 1rem; }
+    .learn__title-row { display: flex; align-items: center; gap: 1.5rem; }
+    .learn__title { flex: 1; font-weight: 500; font-size: 1.75rem; line-height: 2.25rem; }
+    .learn__subtitle { color: var(--muted); margin-top: .25rem; }
+    .risk {
+      flex: none;
+      min-width: 16.125rem;
+      padding: .5rem .75rem;
+      border-radius: .125rem;
+      text-align: center;
+      text-transform: uppercase;
+      color: var(--surface);
+    }
+    .risk--low { background: var(--risk-low); }
+    .risk--medium { background: var(--risk-medium); color: var(--dark); }
+    .risk--high { background: var(--risk-high); }
+
+    .learn .switch { width: 38.75rem; padding: .25rem; background: var(--inset); border-radius: .75rem; }
+    .learn .switch button { height: 2rem; color: var(--dark); }
+    .learn .switch[hidden] { display: none; }
+
+    .learn__body { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+    .learn__columns { display: grid; grid-template-columns: 1fr 1px 1fr; gap: 1.5rem; }
+    .learn__columns > .vsep { width: auto; height: auto; }
+    .learn__column { display: flex; flex-direction: column; gap: 1rem; }
+    .learn__column > * + * { padding-top: 1rem; border-top: 1px solid var(--rule); }
+
+    .section { display: flex; flex-direction: column; gap: .5rem; }
+    .section--example { gap: .25rem; }
+    .section p + p { margin-top: 1.5rem; }
+    .point .t-label { display: block; white-space: pre; }
+    .point + .point { margin-top: .5rem; }
+
+    .learn__footer { display: flex; align-items: center; gap: 1.5rem; }
+    .learn__footer .t-caption { flex: 1; color: var(--muted); text-transform: uppercase; }
+    .btn-accent {
+      width: 13.5rem;
+      height: 2.75rem;
+      padding: .5rem;
+      background: var(--accent);
+      border-radius: .5rem;
+      color: var(--dark);
+    }
+    /* Компонент Button, Type=Accent: Hover совпадает с Default */
+    .btn-accent:active { background: #C1DA65; }
+    .btn-accent:disabled { background: var(--inset); border: 1px solid var(--rule); color: var(--disabled); }
+
+    /* ===== Игровая логика ===== */
+    .is-inactive { opacity: .4; pointer-events: none; }
+
+    /* Таймер: текущий день заполняется за --day-ms, конец анимации = переход на следующий день */
+    .month__day.is-current { position: relative; overflow: hidden; }
+    .month__day.is-current::after {
       content: '';
       position: absolute;
-      top: 50%;
-      left: -8px;
-      transform: translateY(-50%);
-      border: 8px solid transparent;
-      border-right-color: #1a1a2e;
+      inset: 0;
+      background: var(--accent);
+      transform-origin: left;
+      animation: day-fill var(--day-ms, 4s) linear forwards;
     }
-    .question-circle:hover+.hint-message,
-    .question-circle:focus+.hint-message,
-    .example-trigger:hover .hint-message {
-      visibility: visible;
-      opacity: 1;
-    }
+    body.is-paused .month__day.is-current::after { animation-play-state: paused; }
+    @keyframes day-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-    /* ── основной контент ── */
-    .teaching-main-content {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      transition: filter 0.4s ease, opacity 0.4s ease;
-      position: relative;
-      z-index: 1;
+    /* Компонент Type=Savings, State=Buy / Sell: форма суммы */
+    .savings-head { display: flex; flex-direction: column; gap: .25rem; }
+    .savings-spacer { flex: 1; min-height: 0; }
+    .savings-form { display: flex; flex-direction: column; gap: .25rem; }
+    .savings-form__caption { color: var(--muted); }
+    .savings-form__row { display: flex; justify-content: space-between; }
+    .savings-form__row button { height: 1.25rem; }
+    .amount-input {
+      width: 100%;
+      height: 2.125rem;
+      padding: .25rem;
+      background: var(--inset);
+      border: 1px solid var(--dark);
+      border-radius: .5rem;
+      color: var(--dark);
+      outline: none;
     }
+    .btn-confirm-small {
+      height: 1.75rem;
+      padding: .25rem;
+      background: var(--accent);
+      border-radius: .5rem;
+      color: var(--dark);
+    }
+    .btn-confirm-small:active { background: #C1DA65; }
 
-    /* ── оверлей ── */
-    .example-overlay {
-      display: none;
+    /* Уведомления движка */
+    .toasts {
       position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 1000;
-      justify-content: center;
-      align-items: center;
-      padding: 20px;
-      pointer-events: none;
-    }
-    .example-overlay.visible {
+      left: 50%;
+      bottom: 2rem;
+      transform: translateX(-50%);
       display: flex;
-    }
-    .example-overlay .overlay-content {
-      background: #D0E3BE;
-      border-radius: clamp(20px, 3vh, 35px);
-      padding: clamp(20px, 3vh, 40px) clamp(24px, 4vw, 50px);
-      max-width: 780px;
-      width: 100%;
-      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
-      position: relative;
-      animation: overlaySlideIn 0.4s ease;
-      pointer-events: auto;
-      max-height: 90vh;
-      overflow-y: auto;
-    }
-    .example-overlay:not(.visible) {
+      flex-direction: column-reverse;
+      align-items: center;
+      gap: .5rem;
       pointer-events: none;
+      z-index: 20;
     }
-
-    @keyframes overlaySlideIn {
-      from {
-        opacity: 0;
-        transform: scale(0.95) translateY(20px);
-      }
-      to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-      }
+    .toast {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      padding: .5rem .75rem;
+      background: var(--dark);
+      border-radius: .5rem;
+      color: var(--surface);
+      font-size: .875rem;
+      line-height: 1.25rem;
+      animation: toast-in .2s ease-out;
     }
+    .toast::before { content: ''; width: .5rem; height: .5rem; border-radius: 50%; background: var(--accent); }
+    .toast--success::before { background: #5FB08C; }
+    .toast--error::before { background: var(--down); }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(.5rem); } }
 
-    .example-overlay .close-btn {
-      position: absolute;
-      right: clamp(16px, 2vw, 24px);
-      top: clamp(10px, 1.5vh, 16px);
-      font-size: 175%;
-      font-weight: 700;
-      color: #144733;
-      cursor: pointer;
-      background: none;
-      border: none;
-      line-height: 1;
-      transition: transform 0.2s;
+    /* Компонент Life Event / Modal */
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: rgba(58, 66, 56, .38);
       z-index: 10;
     }
-    .example-overlay .close-btn:hover {
-      transform: rotate(90deg);
-    }
-
-    .example-overlay .icon-badge {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 8px;
-    }
-    .example-overlay .icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: clamp(36px, 4vw, 48px);
-      height: clamp(36px, 4vw, 48px);
-      background: #C7F26B;
-      border-radius: 50%;
-      font-weight: 800;
-      font-size: 137.5%;
-      color: #144733;
-    }
-    .example-overlay .badge {
-      background: #144733;
-      color: #FFFEFA;
-      font-weight: 600;
-      font-size: 100%;
-      padding: 2px 20px;
-      border-radius: 30px;
-    }
-    .example-overlay .title {
-      font-weight: 800;
-      font-size: 150%;
-      color: #144733;
-      margin: 8px 0 6px;
-    }
-    .example-overlay .desc {
-      font-weight: 400;
-      font-size: 93.75%;
-      line-height: 1.5;
-      color: #1A241C;
-      text-align: justify;
-    }
-    .example-overlay .desc code {
-      background: rgba(0, 0, 0, 0.05);
-      padding: 2px 8px;
-      border-radius: 6px;
-      font-size: 87.5%;
-    }
-
-    /* ── карточка контента ── */
-    .content-card {
-      background: #FFFEFA;
-      border-radius: clamp(16px, 2vh, 28px);
-      padding: clamp(14px, 2vh, 32px) clamp(16px, 2.5vw, 34px) clamp(14px, 2vh, 28px);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.02);
-      flex: 1;
-      min-height: 0;
-      overflow: hidden;
-      transition: filter 0.4s ease, opacity 0.4s ease, height 0.35s ease;
+    .modal[hidden] { display: none; }
+    .life-event {
+      width: 32.5rem;
       display: flex;
       flex-direction: column;
+      align-items: flex-start;
+      gap: 1rem;
+      padding: 2rem;
+      animation: appear .2s ease-out;
     }
-
-    .content-card.blurred {
-      filter: blur(6px) brightness(0.7);
-      opacity: 0.6;
-      pointer-events: none;
-      user-select: none;
-    }
-
-    .asset-content {
-      display: none;
-      flex-direction: column;
-      gap: clamp(12px, 1.5vh, 24px);
-      height: 100%;
-      overflow-y: auto;
-    }
-    .asset-content.active {
-      display: flex;
-    }
-
-    .asset-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(16px, 2vw, 30px);
-      flex: 1;
-    }
-
-    .left-column,
-    .right-column {
-      display: flex;
-      flex-direction: column;
-      gap: clamp(10px, 1.2vh, 20px);
-    }
-
-    .risk-badge {
+    .life-event__icon { font-size: 1.75rem; line-height: 2.25rem; }
+    .life-event__amount { font-weight: 500; font-size: 2.5rem; line-height: 3rem; }
+    #modal-type, #modal-confirm { text-transform: uppercase; }
+    .life-event__text { color: var(--muted); }
+    .btn-confirm {
       width: 100%;
-      border-radius: 31.5px;
-      padding: clamp(6px, 0.8vh, 14px) clamp(12px, 1.5vw, 20px);
-      font-weight: 600;
-      font-size: 87.5%;
-      line-height: 1.2;
-      color: #1A241C;
-      text-align: center;
-      flex-shrink: 0;
+      height: 2.75rem;
+      padding: .5rem;
+      background: var(--dark);
+      border-radius: .5rem;
+      color: var(--surface);
     }
-    .risk-badge--low {
-      background: #C3FFC5;
-    }
-    .risk-badge--medium {
-      background: #FFBF66;
-    }
-    .risk-badge--high {
-      background: #FF9494;
-    }
+    .btn-confirm:hover { background: var(--dark-2); }
+    .btn-confirm:active { background: #1A1E1A; }
 
-    .what-section {
-      padding: clamp(10px, 1.2vh, 20px) clamp(14px, 1.8vw, 24px);
-      border-radius: clamp(16px, 2vh, 25px);
-      background: #f8faf9;
-      flex-shrink: 0;
-    }
-    .what-section .title {
-      font-weight: 800;
-      font-size: 112.5%;
-      color: #144733;
-      margin-bottom: 2px;
-    }
-    .what-section .sub {
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      margin-bottom: 4px;
-    }
-    .what-section .desc {
-      font-weight: 400;
-      font-size: 81.25%;
-      line-height: 1.4;
-      color: #1A241C;
-    }
+    /* ===== Вступительные экраны ===== */
+    body.is-entry > .header,
+    body.is-entry > .main { display: none; }
+    .entry { display: none; flex-direction: column; gap: 1.5rem; min-height: 0; }
+    body.is-entry .entry { display: flex; }
 
-    .risk-note {
-      background: #FEF6E5;
-      border-radius: clamp(16px, 2vh, 25px);
-      padding: clamp(10px, 1.2vh, 20px) clamp(14px, 1.8vw, 24px);
-      flex-shrink: 0;
+    .entry__header { display: flex; align-items: center; gap: 1rem; }
+    .logo-dark {
+      width: 2.625rem;
+      height: 2.4375rem;
+      background: var(--dark);
+      -webkit-mask: url(assets/logo.svg) center / contain no-repeat;
+      mask: url(assets/logo.svg) center / contain no-repeat;
     }
-    .risk-note .title {
-      font-weight: 600;
-      font-size: 100%;
-      color: #144733;
-      margin-bottom: 2px;
-    }
-    .risk-note .desc {
-      font-weight: 400;
-      font-size: 81.25%;
-      line-height: 1.4;
-      color: #1A241C;
-    }
+    .entry__meta { flex: 1; text-align: right; color: var(--muted); font-size: .875rem; line-height: 1.25rem; }
+    .entry__rule { flex: none; height: 1px; background: var(--rule); }
 
-    .income-section {
-      background: #F0F6F1;
-      border-radius: clamp(16px, 2vh, 25px);
-      padding: clamp(10px, 1.2vh, 20px) clamp(14px, 1.8vw, 24px);
-      flex-shrink: 0;
-    }
-    .income-section .title {
-      font-weight: 800;
-      font-size: 112.5%;
-      color: #144733;
-      margin-bottom: clamp(6px, 0.8vh, 14px);
-    }
-    .income-item {
-      margin-bottom: clamp(4px, 0.5vh, 12px);
-    }
-    .income-item:last-child {
-      margin-bottom: 0;
-    }
-    .income-item .label {
-      font-weight: 600;
-      font-size: 93.75%;
-      color: #144733;
-    }
-    .income-item .desc {
-      font-weight: 400;
-      font-size: 75%;
-      color: #6E7870;
-      line-height: 1.3;
-    }
+    .entry__content { display: flex; justify-content: center; padding-top: 1.5rem; min-height: 0; }
+    .entry__page { width: 70rem; display: none; flex-direction: column; align-items: flex-start; gap: 1.5rem; }
+    .entry__page.is-active { display: flex; }
+    .entry__page > .entry__rule { align-self: stretch; }
 
-    .investor-tips {
-      background: #F5FBFF;
-      border-radius: clamp(16px, 2vh, 25px);
-      padding: clamp(10px, 1.2vh, 20px) clamp(14px, 1.8vw, 24px);
-      flex-shrink: 0;
-    }
-    .investor-tips .title {
-      font-weight: 800;
-      font-size: 100%;
-      color: #144733;
-      margin-bottom: clamp(4px, 0.5vh, 10px);
-    }
-    .investor-tips .item .label {
-      font-weight: 600;
-      font-size: 81.25%;
-      color: #144733;
-    }
-    .investor-tips .item .desc {
-      font-weight: 400;
-      font-size: 68.75%;
-      color: #6E7870;
-      line-height: 1.3;
-    }
+    .entry__hero { display: flex; flex-direction: column; align-items: flex-start; gap: 1.5rem; }
+    .entry__eyebrow { color: var(--muted); }
+    .entry__hero-title { font-weight: 500; font-size: 2.5rem; line-height: 3rem; }
+    .entry__title { font-weight: 500; font-size: 1.75rem; line-height: 2.25rem; }
+    .entry__muted { color: var(--muted); }
+    .entry__length { display: flex; gap: 2rem; }
+    .entry__length span:first-child { width: 12.5rem; }
+    .entry__steps { align-self: stretch; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+    .entry__steps > div { display: flex; flex-direction: column; gap: .5rem; }
+    .entry__steps h3 { white-space: pre; }
 
-    /* ── пагинация ── */
-    .pagination-wrap {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(8px, 1vw, 14px);
-      flex-shrink: 0;
-      padding-top: clamp(4px, 0.5vh, 8px);
-    }
-
-    .nav-arrow {
-      font-weight: 400;
-      font-size: 225%;
-      line-height: 1;
-      color: #144733;
-      cursor: pointer;
-      user-select: none;
-      transition: opacity 0.2s;
-      padding: 0 4px;
-      flex-shrink: 0;
-    }
-    .nav-arrow:hover {
-      opacity: 0.6;
-    }
-
-    .pagination-center {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      flex: 1;
-      min-width: 0;
-    }
-
-    .pagination {
-      display: flex;
-      align-items: center;
-      gap: clamp(4px, 0.6vw, 8px);
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    .pagination .dot {
-      width: clamp(8px, 0.8vw, 10px);
-      height: clamp(8px, 0.8vw, 10px);
-      border-radius: 50%;
-      background: #C7D1C9;
-      cursor: pointer;
-      transition: background 0.2s;
-      flex-shrink: 0;
-    }
-    .pagination .dot.active {
-      background: #144733;
-    }
-    .pagination .dot.unavailable {
-      cursor: auto;
-    }
-    .pagination .counter {
-      font-weight: 600;
-      font-size: 62.5%;
-      color: #6E7870;
-      margin-top: 2px;
-      text-align: center;
-    }
-
-    /* results */
-    .header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(6px, 1vh, 16px) clamp(10px, 1.5vw, 20px);
-      flex-shrink: 0;
-    }
-
-    .header-left {
-      display: flex;
-      align-items: flex-end;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .header-left img {
-      height: clamp(22px, 2.8vw, 36px);
-      width: auto;
-      display: block;
-    }
-
-    .kopilka-title {
-      font-weight: 800;
-      font-size: 137.5%;
-      line-height: 1.1;
-      color: #0D4F35;
-      letter-spacing: -0.5px;
-    }
-
-    .nav-profile {
-      background: #144733;
-      border-radius: 29.5px;
-      padding: clamp(8px, 1vh, 12px) clamp(20px, 2.5vw, 32px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #FFFFFF;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-    .nav-profile:hover {
-      background: #1f5f45;
-    }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: clamp(6px, 1vw, 12px);
-      flex-wrap: wrap;
-    }
-
-    .back-btn {
-      background: #FFFCF7;
-      border-radius: 29.5px;
-      padding: clamp(6px, 0.8vh, 12px) clamp(14px, 2vw, 28px);
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #1A241C;
-      text-decoration: none;
-      transition: background 0.2s;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-    }
-    .back-btn:hover {
-      background: #f0ede6;
-    }
-
-    .main-title {
-      font-weight: 800;
-      font-size: 175%;
-      line-height: 1.1;
-      color: #0D4F35;
-    }
-
-    .sub-title {
-      font-weight: 400;
-      font-size: 87.5%;
-      color: #4D6E57;
-      margin-top: clamp(2px, 0.3vh, 6px);
-    }
-
-    .months-badge {
-      display: inline-block;
-      background: #D1EDD6;
-      border-radius: 19px;
-      padding: clamp(4px, 0.5vh, 8px) clamp(14px, 1.5vw, 20px);
-      font-weight: 600;
-      font-size: 75%;
-      color: #0D4F35;
-      margin-top: clamp(6px, 0.8vh, 12px);
-    }
-
-    /* ── основное содержимое (скролл внутри) ── */
-    .results-main-content {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: clamp(10px, 1.5vh, 20px);
-      min-height: 0;
-      overflow-y: auto;
-      padding-right: clamp(2px, 0.3vw, 6px);
-    }
-
-    /* ── карточка капитала ── */
-    .results-capital-card {
-      background: #0D4F35;
-      border-radius: clamp(20px, 2.5vh, 28px);
-      padding: clamp(20px, 2.5vh, 30px) clamp(24px, 3vw, 36px);
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: clamp(12px, 2vw, 30px);
-      flex-shrink: 0;
-    }
-
-    .capital-left .label {
-      font-weight: 600;
-      font-size: 75%;
-      color: #D1EDD6;
-    }
-    .capital-left .amount {
-      font-weight: 800;
-      font-size: 175%;
-      line-height: 1.1;
-      color: #FFFFFF;
-      margin-top: 2px;
-    }
-
-    .capital-center .growth {
-      font-weight: 800;
-      font-size: 137.5%;
-      color: #C7F26B;
-    }
-    .capital-center .percent {
-      font-weight: 600;
-      font-size: 87.5%;
-      color: #C7F26B;
-    }
-
-    .capital-right .start {
-      font-weight: 400;
-      font-size: 81.25%;
-      color: #D1EDD6;
-    }
-    .capital-right .growth-label {
-      font-weight: 400;
-      font-size: 75%;
-      color: #D1EDD6;
-      margin-top: 2px;
-    }
-    .capital-right .growth-amount {
-      font-weight: 700;
-      font-size: 112.5%;
-      color: #FFFFFF;
-    }
-
-    /* ── сетка результатов ── */
-    .results-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(12px, 2vw, 24px);
-      flex: 1;
-      min-height: 0;
-    }
-
-    .results-title {
-      font-weight: 800;
-      font-size: 125%;
-      color: #0D4F35;
-      flex-shrink: 0;
-    }
-
-    .stats-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr 1fr;
-      gap: clamp(8px, 1vw, 14px);
-      flex-shrink: 0;
-    }
-
-    .stat-card {
-      background: #FFFFFF;
-      border: 1px solid #D1EDD6;
-      border-radius: clamp(14px, 1.8vh, 20px);
-      padding: clamp(12px, 1.5vh, 20px) clamp(14px, 1.5vw, 20px);
-    }
-    .stat-card .label {
-      font-weight: 600;
-      font-size: 68.75%;
-      color: #4D6E57;
-    }
-    .stat-card .value {
-      font-weight: 800;
-      font-size: 112.5%;
-      color: #0D4F35;
-      margin-top: 2px;
-    }
-
-    /* ── структура активов ── */
-    .structure-panel {
-      background: #FFFFFF;
-      border: 1px solid #D1EDD6;
-      border-radius: clamp(16px, 2vh, 22px);
-      padding: clamp(16px, 2vh, 26px) clamp(18px, 2vw, 26px);
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-
-    .structure-title {
-      font-weight: 700;
-      font-size: 100%;
-      color: #0D4F35;
-      flex-shrink: 0;
-      margin-bottom: clamp(8px, 1vh, 14px);
-    }
-
-    .bars {
-      display: flex;
-      height: clamp(16px, 2vh, 24px);
-      margin-bottom: clamp(12px, 1.5vh, 26px);
-      flex-shrink: 0;
-    }
-    .bar {
-      height: 100%;
-      border-radius: 0;
-      flex-shrink: 0;
-      position: relative;
-      overflow: hidden;
-    }
-
-    /* Ensure bars respect explicit widths instead of flex-growing equally */
-    .bars .bar { flex: 0 0 auto; }
-    .bar:first-child { border-radius: 4px 0 0 4px; }
-    .bar:last-child { border-radius: 0 4px 4px 0; }
-
-    .bar--1 { width: 12%; background: #4AA670; }
-    .bar--2 { width: 24%; background: #0D4F35; }
-    .bar--3 { width: 18%; background: #C7F26B; }
-    .bar--4 { width: 8%; background: #6BB885; }
-    .bar--5 { width: 22%; background: #94CC8F; }
-    .bar--6 { width: 6%; background: #5C8F66; }
-    .bar--7 { width: 5%; background: #ABDBA1; }
-    .bar--8 { width: 5%; background: #40734F; }
-
-    .bar .bar-label {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      font-weight: 700;
-      color: #ffffff;
-      text-shadow: 0 1px 0 rgba(0,0,0,0.25);
-      pointer-events: none;
-    }
-
-    .structure-legend {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(4px, 0.5vh, 10px) clamp(12px, 1.5vw, 20px);
-      flex: 1;
-      align-content: start;
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: clamp(4px, 0.5vw, 8px);
-    }
-    .legend-item .dot {
-      width: clamp(8px, 0.7vw, 10px);
-      height: clamp(8px, 0.7vw, 10px);
-      border-radius: 3px;
-      flex-shrink: 0;
-    }
-    .legend-item .name {
-      font-weight: 600;
-      font-size: 62.5%;
-      color: #0D4F35;
-    }
-    .legend-item .value {
-      font-weight: 400;
-      font-size: 62.5%;
-      color: #4D6E57;
-      margin-left: auto;
-      white-space: nowrap;
-    }
-
-    /* ── правая колонка: доходность ── */
-    .results-right {
-      display: flex;
-      flex-direction: column;
-      gap: clamp(10px, 1.2vh, 16px);
-    }
-
-    .earnings-panel {
-      background: #FFFFFF;
-      border: 1px solid #D1EDD6;
-      border-radius: clamp(16px, 2vh, 22px);
-      padding: clamp(16px, 2vh, 26px) clamp(18px, 2vw, 26px);
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-
-    .earnings-title {
-      font-weight: 700;
-      font-size: 100%;
-      color: #0D4F35;
-      flex-shrink: 0;
-      margin-bottom: clamp(8px, 1vh, 16px);
-    }
-
-    .earning-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0 clamp(12px, 1.5vw, 20px);
-      flex: 1;
-      align-content: start;
-    }
-
-    .earning-col {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .earning-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      height: clamp(34px, 4vh, 46px);
-      border-bottom: 1px solid #D1EDD6;
-      flex-shrink: 0;
-      padding: 0 2px;
-    }
-    .earning-row:last-child {
-      border-bottom: none;
-    }
-
-    .earning-row .name {
-      font-weight: 600;
-      font-size: 68.75%;
-      color: #0D4F35;
-    }
-    .earning-row .amount {
-      font-weight: 700;
-      font-size: 68.75%;
-      text-align: right;
-    }
-    .earning-row .amount.positive {
-      color: #4AA670;
-    }
-    .earning-row .amount.negative {
-      color: #A64A4A;
-    }
-
-    /* ── кнопки действий ── */
-    .result-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: clamp(10px, 1.5vw, 18px);
-      flex-shrink: 0;
-      padding-top: clamp(4px, 0.5vh, 8px);
-    }
-
+    /* Кнопки Button (Primary / Secondary) размером 40px */
     .btn-primary {
-      padding: clamp(10px, 1.2vh, 16px) clamp(28px, 3vw, 44px);
-      border: none;
-      border-radius: 14px;
-      background: #144733;
-      color: #FFFFFF;
-      font-weight: 700;
-      font-size: 87.5%;
-      cursor: pointer;
-      transition: background 0.2s;
+      height: 2.5rem;
+      padding: .5rem;
+      background: var(--dark);
+      border-radius: .5rem;
+      color: var(--surface);
     }
-    .btn-primary:hover {
-      background: #1a5a47;
+    .btn-primary:hover { background: var(--dark-2); }
+    .btn-primary:active { background: #1A1E1A; }
+    .btn-primary:disabled { background: var(--inset); border: 1px solid var(--rule); color: var(--disabled); }
+    .btn-back {
+      width: 9rem;
+      height: 2.5rem;
+      padding: .5rem;
+      border: 1px solid var(--rule);
+      border-radius: .5rem;
     }
+    .btn-back:hover { background: var(--inset); }
+    .btn-back:active { background: #000000; }
 
-    /* ── СОБЫТИЯ ── */
-    .event-screen {
-      position: relative;
-      flex: 1;
-      width: 100%;
-      background: #144733;
-      padding: clamp(20px, 3vh, 40px) clamp(24px, 3vw, 48px);
+    .entry__form {
+      width: 42rem;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      box-sizing: border-box;
+      align-items: flex-start;
+      gap: 1rem;
+      padding: 2rem;
+      background: var(--surface);
+      border-radius: 1.5rem;
     }
-
-    /* карточка события */
-    .event-card {
-      position: relative;
+    .text-field {
       width: 100%;
-      max-width: 1025px;
-      min-height: 50vh;
-      margin: 0 auto;
-      background: #FFFFFF;
-      border-radius: clamp(20px, 2.8vh, 38px);
-      padding: clamp(30px, 4vh, 60px) clamp(24px, 3vw, 50px) clamp(30px, 4vh, 50px);
+      height: 3rem;
+      padding: .75rem;
+      background: var(--surface);
+      border: 1px solid var(--rule);
+      border-radius: .75rem;
+      color: var(--dark);
+      outline: none;
+    }
+    .text-field::placeholder { color: var(--muted); }
+    .field-group { align-self: stretch; display: flex; flex-direction: column; gap: .5rem; }
+    .text-field:focus { border-color: var(--dark); }
+
+    .entry__cards { align-self: stretch; display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    .choice {
+      min-height: 15rem;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      gap: clamp(12px, 1.6vh, 22px);
-      overflow: hidden;
-    }
-
-    /* иконка в круге */
-    .event-icon {
-      width: clamp(48px, 5.2vw, 75px);
-      height: clamp(48px, 5.2vw, 75px);
-      border-radius: 50%;
-      background: #E8F8EA;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: clamp(24px, 3vw, 43px);
-      flex-shrink: 0;
-      margin-top: clamp(4px, 0.5vh, 8px);
-    }
-
-    /* заголовок события */
-    .event-title {
-      font-family: 'Inter', sans-serif;
-      font-weight: 800;
-      font-size: clamp(18px, 2.6vw, 38px);
-      line-height: 1.2;
-      text-align: center;
-      color: #0D2412;
-      max-width: 828px;
-      flex-shrink: 0;
-    }
-
-    /* сумма */
-    .event-amount {
-      font-family: 'Inter', sans-serif;
-      font-weight: 800;
-      font-size: clamp(36px, 4.5vw, 64px);
-      line-height: 1.1;
-      text-align: center;
-      color: #2BAE59;
-      flex-shrink: 0;
-    }
-
-    /* подпись */
-    .event-desc {
-      font-family: 'Inter', sans-serif;
-      font-weight: 400;
-      font-size: clamp(14px, 1.8vw, 25px);
-      line-height: 1.2;
-      text-align: center;
-      color: #1D3F17;
-      max-width: 662px;
-      flex-shrink: 0;
-    }
-
-    #introText {
-      white-space: pre-line;
+      align-items: flex-start;
+      gap: 1rem;
+      padding: 1.5rem;
+      border: 2px solid transparent;
       text-align: left;
-      max-width: 1000px;
-      font-size: clamp(15px, 1.7vw, 24px);
-      line-height: 1.5;
-      color: #18351D;
+      transition: transform .12s ease-out, box-shadow .12s ease-out;
+    }
+    /* Карточка «приподнимается» при наведении и «вдавливается» при нажатии */
+    .choice:hover { transform: translateY(-2px); box-shadow: 3px 6px 8px #8E9488; }
+    .choice:active { transform: translateY(1px) scale(.99); box-shadow: 1px 1px 1.5px #8E9488; transition-duration: .05s; }
+    .choice__text { color: var(--muted); }
+    .choice.is-selected { background: var(--dark-2); border-color: var(--accent); color: var(--surface); }
+    .choice.is-selected .choice__text { color: var(--accent); }
+    .choice.is-selected .choice__action::before {
+      content: '';
+      display: inline-block;
+      width: .75rem;
+      height: .75rem;
+      margin-right: .25rem;
+      border-radius: 50%;
+      background: var(--surface);
     }
 
-    /* кнопка «ОТЛИЧНО!» */
-    .event-accept {
-      background: #2BAE59;
-      border-radius: 17px;
-      border: none;
-      padding: clamp(14px, 1.8vh, 22px) clamp(40px, 5vw, 60px);
-      font-family: 'Inter', sans-serif;
-      font-weight: 800;
-      font-size: clamp(18px, 2vw, 30px);
-      line-height: 1.2;
-      color: #FFFFFF;
-      cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
-      margin-top: clamp(8px, 1.2vh, 18px);
-      flex-shrink: 0;
+    .entry__multi {
+      align-self: stretch;
+      display: flex;
+      gap: 1.5rem;
+      padding: 1.5rem;
+      background: var(--surface);
+      border-radius: 1.5rem;
     }
+    .entry__multi > .vsep { margin: 0; }
+    .entry__multi-create { flex: 1; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+    .entry__multi-join { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; }
+    .entry__invite { margin-top: 1.5rem; }
+    /* Мультиплеер пока не активен: блок приглушён целиком, кнопки сохраняют вид из макета */
+    .entry__multi .btn-primary:disabled { background: var(--dark); border: 0; color: var(--surface); }
 
-    .event-accept:hover {
-      background: #249b4e;
+    /* ===== Итоги года ===== */
+    body.is-final > .header,
+    body.is-final > .main,
+    body.is-final > .entry { display: none; }
+    .final {
+      display: none;
+      position: fixed;
+      inset: 0;
+      overflow-y: auto;
+      flex-direction: column;
+      gap: 1.5rem;
+      padding: 2rem;
+      background: var(--bg);
     }
+    body.is-final .final { display: flex; }
+    .final > * { flex: none; }
 
-    .event-accept:active {
-      transform: scale(0.98);
+    .final__header { display: flex; align-items: center; gap: .5rem; height: 2.625rem; }
+    .final__status { flex: 1; display: flex; justify-content: flex-end; align-items: center; gap: .5rem; color: var(--muted); }
+    .final__status::before { content: ''; width: .375rem; height: .375rem; border-radius: 50%; background: var(--up); }
+
+    .summary {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      padding: 2rem 1.5rem;
+      background: var(--dark);
+      border-radius: 1.5rem;
+      color: var(--surface);
     }
+    .summary__primary { display: grid; grid-template-columns: 540fr 430fr 278fr; gap: 2rem; }
+    .summary__sources { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2rem; }
+    .summary__item { display: flex; flex-direction: column; gap: .5rem; }
+    .summary__item--small { gap: .25rem; }
+    .summary__capital { font-family: var(--mono); font-size: 4rem; line-height: 4.75rem; white-space: nowrap; }
+    .summary__profit { font-family: var(--mono); font-size: 3rem; line-height: 4.75rem; white-space: nowrap; }
+    .summary__small { font-size: .875rem; line-height: 1.25rem; }
+    .summary__faded { opacity: .65; }
+    .summary__accent, .summary__profit.up { color: var(--accent); }
+    .summary__profit.down, .summary .m-metric.down { color: var(--down); }
+    .summary__rank.is-hidden { visibility: hidden; }
+    .summary__rule { height: 1px; background: var(--rule); opacity: .3; }
+
+    .report { display: flex; flex-direction: column; gap: 1rem; padding: 1.5rem; }
+    .report__rule { height: 1px; background: var(--rule); margin-top: .5rem; }
+    .composition { display: flex; gap: 2px; height: 2rem; border-radius: .5rem; overflow: hidden; margin-bottom: .5rem; }
+    .composition span { min-width: 2px; }
+
+    .legend { display: flex; gap: 1.5rem; }
+    .legend > .vsep { margin: 0; }
+    .legend__column { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
+    .legend__item { display: flex; align-items: center; gap: .5rem; font-size: .875rem; line-height: 1.25rem; }
+    .legend__item > :nth-child(2) { flex: 1; }
+    .legend__value { width: 7rem; text-align: right; white-space: nowrap; }
+    .legend__share { width: 2.5rem; text-align: right; color: var(--muted); }
+    .marker { flex: none; width: .75rem; height: .75rem; border: .5px solid var(--rule); border-radius: .25rem; }
+
+    .results { display: flex; gap: 1rem; margin-top: .25rem; }
+    .results > .vsep { margin: 0; }
+    .results__column { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .result { display: flex; align-items: center; height: 1.5rem; font-size: .875rem; }
+    .result__name { width: 10rem; flex: none; }
+    .result__track { flex: 1; display: flex; align-items: center; padding-right: 1.5rem; }
+    .result__bar { height: .25rem; border-radius: .125rem; }
+    .result__value { width: 7rem; flex: none; text-align: right; white-space: nowrap; }
+
+    .history { display: flex; flex-direction: column; gap: 1rem; }
+    .history__heading { display: flex; flex-direction: column; padding: 0 1.5rem; }
+    .history__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+    .history-card { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; border-radius: .75rem; min-width: 0; }
+    .history-card__head { display: flex; gap: .75rem; }
+    .history-card__identity { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .25rem; }
+    .history-card__identity .m-caption { color: var(--muted); overflow-wrap: anywhere; }
+    .history-card__metric { flex: none; width: 9.5rem; display: flex; flex-direction: column; align-items: flex-end; gap: .25rem; text-align: right; }
+    .history-card__metric .t-caption { color: var(--muted); }
+    .history-card .chart { flex: none; height: 3.25rem; }
+
+    .final__footer { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding-bottom: 1rem; }
   </style>
 </head>
 <body>
-  <div class="page">
-    <!-- Контентная область -->
-    <div class="content">
-      <!-- Страницы-секции -->
-      <div id="entrance" class="page-section active">
-        <header class="header">
-            <div class="header-left">
-              <span class="kopilka-title">КОПИЛКА</span>
-              <img src="icon.svg" alt=""/>
-            </div>
-        </header>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="grad-up" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#397E62" stop-opacity=".3"/>
+        <stop offset="1" stop-color="#397E62" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="grad-down" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#C65A4D" stop-opacity=".3"/>
+        <stop offset="1" stop-color="#C65A4D" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="grad-market" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#397E62"/>
+        <stop offset="1" stop-color="#397E62" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="grad-neutral" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#252925" stop-opacity=".16"/>
+        <stop offset="1" stop-color="#252925" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+  </svg>
 
-        <div class="entrance-main-content">
-          <!-- левая колонка-->
-          <div>
-            <div class="hero-row">
-              <div class="hero-left">
-                <div class="main-headline">Построй своё финансовое будущее</div>
-                <div class="subhead">Принимай решения, переживай неожиданные события, инвестируй и смотри, к чему приведут твои решения.</div>
-                <div class="hero-actions">
-                    <button class="kopilka-btn" onclick="showPage('registration')">Начать игру →</button>
-                    <span class="info-badge">20-30 минут</span>
-                    <span class="info-badge">12 игровых месяцев</span>
-                </div>
-              </div>
-            </div>
-            <div class="how-it-works">
-              <div class="title">Как это работает</div>
-              <div class="steps">
-                <div class="step">
-                    <div class="step-title">01 Живи</div>
-                    <div class="step-desc">Получай зарплату, доходы и неожиданные расходы</div>
-                </div>
-                <div class="step">
-                    <div class="step-title">02 Решай</div>
-                    <div class="step-desc">Покупай активы и меняй состав портфеля</div>
-                </div>
-                <div class="step">
-                    <div class="step-title">03 Смотри результат</div>
-                    <div class="step-desc">Проверь, как решения повлияли на капитал</div>
-                </div>
-              </div>
-            </div>
-          </div>
+  <!-- ===== Вступительные экраны (Entry / 01–05) ===== -->
+  <section class="entry" id="entry">
+    <header class="entry__header">
+      <span class="logo-dark" aria-hidden="true"></span>
+      <span class="t-heading">КОПИЛКА</span>
+      <span class="entry__meta" id="entry-meta">Финансовая игра</span>
+    </header>
+    <div class="entry__rule"></div>
 
-          <!-- правая колонка: Капитал -->
-          <div class="capital-card">
-            <div class="label">ТВОЙ КАПИТАЛ</div>
-            <div class="amount">1 248 600 ₽</div>
-            <div class="growth">+18,4% за 12 месяцев</div>
-            <div class="histogram">
-                <div class="entrance-bar entrance-bar--1"></div>
-                <div class="entrance-bar entrance-bar--2"></div>
-                <div class="entrance-bar entrance-bar--3"></div>
-                <div class="entrance-bar entrance-bar--4"></div>
-                <div class="entrance-bar entrance-bar--5"></div>
-                <div class="entrance-bar entrance-bar--6"></div>
-                <div class="entrance-bar entrance-bar--7"></div>
-                <div class="entrance-bar entrance-bar--8"></div>
-            </div>
+    <div class="entry__content">
+      <!-- 01 · Start -->
+      <div class="entry__page" data-page="start">
+        <div class="entry__hero">
+          <span class="t-label entry__eyebrow">ФИНАНСОВАЯ ИГРА</span>
+          <h1 class="entry__hero-title">Построй своё<br>финансовое будущее</h1>
+          <p class="entry__muted">Принимай решения, переживай неожиданные события,<br>инвестируй и смотри, к чему приведут твои решения.</p>
+          <button type="button" class="btn-primary t-label" data-go="name" style="width: 16.5rem">Начать игру →</button>
+          <div class="entry__length m-body">
+            <span>20–30 минут</span>
+            <span>12 игровых месяцев</span>
           </div>
+        </div>
+        <div class="entry__rule"></div>
+        <h2 class="t-heading">Как это работает</h2>
+        <div class="entry__steps">
+          <div><h3 class="t-heading">01  Живи</h3><p class="entry__muted">Получай зарплату, доходы и неожиданные расходы</p></div>
+          <div><h3 class="t-heading">02  Решай</h3><p class="entry__muted">Покупай активы и меняй состав портфеля</p></div>
+          <div><h3 class="t-heading">03  Смотри результат</h3><p class="entry__muted">Проверь, как решения повлияли на капитал</p></div>
         </div>
       </div>
-      <div id="registration" class="page-section">
-        <!-- HEADER -->
-        <header class="header">
-          <div class="header-left">
-            <span class="kopilka-title">КОПИЛКА</span>
-            <img src="icon.svg" alt=""/>
-          </div>
-        </header>
 
-        <!-- HERO -->
-        <div class="hero-row">
-          <div class="hero-left">
-            <div class="register-title">Как тебя зовут?</div>
-            <div class="register-subtitle">Имя будет отображаться в игре и в твоём прогрессе.</div>
+      <!-- 02 · Name -->
+      <div class="entry__page" data-page="name">
+        <button type="button" class="btn-back t-label" data-go="start">← Назад</button>
+        <h1 class="entry__title">Как тебя зовут?</h1>
+        <p class="entry__muted">Имя будет отображаться в игре и в твоём прогрессе.</p>
+        <form class="entry__form" id="name-form" autocomplete="off">
+          <div class="field-group">
+            <label class="t-label" for="name-input">Введи свое имя</label>
+            <input class="text-field m-body" id="name-input" maxlength="20" placeholder="Введи свое имя">
+            <span class="t-caption entry__muted">Можно использовать настоящее имя или никнейм.</span>
           </div>
-        </div>
+          <button type="submit" class="btn-primary t-label" id="name-submit" style="width: 15rem" disabled>Продолжить →</button>
+        </form>
+      </div>
 
-        <!-- MAIN CONTENT -->
-        <div class="registration-main-content">
-          <div class="register-card">
-            <div class="input-label">Введи свое имя</div>
-            <input class="input-field" type="text" placeholder="" />
-            <button class="btn-continue" type="button">Продолжить →</button>
-            <div class="input-hint">Можно использовать настоящее имя или никнейм.</div>
-          </div>
+      <!-- 03 · Mode -->
+      <div class="entry__page" data-page="mode">
+        <button type="button" class="btn-back t-label" data-go="name">← Назад</button>
+        <h1 class="entry__title">Как будем играть?</h1>
+        <div class="entry__cards">
+          <button type="button" class="choice raised" data-go="solo">
+            <span class="t-heading">Одиночная игра</span>
+            <span class="choice__text">Игра против компьютера.<br>Учебный или продвинутый шаблон.<br>Без лобби и ожидания участников.</span>
+            <span class="t-label">Выбрать →</span>
+          </button>
+          <button type="button" class="choice raised" data-go="multi">
+            <span class="t-heading">Мультиплеер</span>
+            <span class="choice__text">Создай комнату или присоединись.<br>Совместная игра с другими участниками.<br>До 30 игроков в одной комнате.</span>
+            <span class="t-label">Выбрать →</span>
+          </button>
         </div>
       </div>
-      <div id="portfolio" class="page-section">
-        <!-- HEADER -->
-        <header class="header">
-          <div class="header-left">
-            <span class="kopilka-title">КОПИЛКА</span>
-            <img src="icon.svg" alt=""/>
-          </div>
-          <div class="header-right">
-            <button class="nav-profile"></button>
-          </div>
-        </header>
 
-        <!-- HERO -->
-        <div class="hero-row">
-          <div class="hero-left">
-            <span class="day-badge">День 0</span>
-            <span class="portfolio-title">Твой портфель</span>
-            <button class="kopilka-btn" data-game-pause-toggle aria-pressed="false">Пауза</button>
-          </div>
+      <!-- 04 · Solo · Training -->
+      <div class="entry__page" data-page="solo">
+        <button type="button" class="btn-back t-label" data-go="mode">← Назад</button>
+        <h1 class="entry__title">Выбери шаблон игры</h1>
+        <div class="entry__cards" id="templates">
+          <button type="button" class="choice raised" data-template="training">
+            <span class="t-heading">Учебная</span>
+            <span class="choice__text">4 секунды на игровой день.<br>Категории открываются по месяцам.<br>Обычная частота жизненных событий.</span>
+            <span class="t-label choice__action"></span>
+          </button>
+          <button type="button" class="choice raised" data-template="advanced">
+            <span class="t-heading">Продвинутая</span>
+            <span class="choice__text">3 секунды на игровой день.<br>Все категории открыты с начала.<br>Повышенная частота жизненных событий.</span>
+            <span class="t-label choice__action"></span>
+          </button>
         </div>
-
-        <!-- MAIN CONTENT -->
-        <div class="portfolio-main-content">
-
-          <!-- ЛЕВАЯ КОЛОНКА -->
-          <div class="left-column">
-
-            <!-- Статистика -->
-            <div class="stats-row">
-              <div class="stat-card">
-                <div class="label">Общий капитал</div>
-                <div class="value">0 ₽</div>
-              </div>
-              <div class="stat-card">
-                <div class="label">Свободные деньги</div>
-                <div class="value">0 ₽</div>
-              </div>
-            </div>
-
-            <!-- Таблица портфеля -->
-            <div class="portfolio-table">
-              <div class="table-title">Структура портфеля</div>
-              <div class="asset-list">
-                <div class="asset-row">
-                  <div class="asset-name">Накопительный счёт</div>
-                  <div class="asset-value">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-green" style="width:0%;"></div></div>
-                </div>
-                <div class="asset-row">
-                  <div class="asset-name inactive">ОФЗ</div>
-                  <div class="asset-value inactive">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-dark" style="width:0%;"></div></div>
-                </div>
-                <div class="asset-row">
-                  <div class="asset-name inactive">Корп. облигации</div>
-                  <div class="asset-value inactive">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-mint" style="width:0%;"></div></div>
-                </div>
-                <div class="asset-row">
-                  <div class="asset-name inactive">ВДО</div>
-                  <div class="asset-value inactive">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-gold" style="width:0%;"></div></div>
-                </div>
-                <div class="asset-row">
-                  <div class="asset-name inactive">ПИФ</div>
-                  <div class="asset-value inactive">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-sand" style="width:0%;"></div></div>
-                </div>
-                <div class="asset-row">
-                  <div class="asset-name inactive">Акции</div>
-                  <div class="asset-value inactive">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-blue" style="width:0%;"></div></div>
-                </div>
-                <div class="asset-row">
-                  <div class="asset-name inactive">Иностранная валюта</div>
-                  <div class="asset-value inactive">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-purple" style="width:0%;"></div></div>
-                </div>
-                <div class="asset-row">
-                  <div class="asset-name inactive">Золото</div>
-                  <div class="asset-value inactive">0 ₽</div>
-                  <div class="asset-bar"><div class="fill fill-teal" style="width:0%;"></div></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- ПРАВАЯ КОЛОНКА -->
-          <div class="right-panel">
-
-            <!-- Панель действий -->
-            <div class="actions-panel">
-              <div class="actions-title">Что сделать?</div>
-              <div class="actions-list">
-                <div class="action-item" onclick="showPage('trade')">
-                  <div class="title">Инвестировать</div>
-                  <div class="desc">Выбери инструмент и сумму</div>
-                </div>
-                <div class="action-item" onclick="showPage('teaching')">
-                  <div class="title">Обучение</div>
-                  <div class="desc">Разберись, как работает инструмент</div>
-                </div>
-                <div class="action-item" onclick="if(window.triggerTestEvent){window.triggerTestEvent();} else { showPage('event'); }">
-                  <div class="title">Хочу ивент!</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Кнопка "Завершить" -->
-            <button class="btn-finish" onclick="(function(){ if(window.endGameNow) { window.endGameNow(); } else { showPage('results'); } })()">Завершить →</button>
-
-          </div>
-        </div>
+        <button type="button" class="btn-primary t-label" id="start-game" style="width: 14rem">Начать игру</button>
       </div>
-      <div id="trade" class="page-section">
-        <!-- HEADER -->
-        <header class="header">
-          <div class="header-left">
-            <span class="kopilka-title">КОПИЛКА</span>
-            <img src="icon.svg" alt=""/>
+
+      <!-- 05 · Multiplayer: пока не активен -->
+      <div class="entry__page" data-page="multi">
+        <button type="button" class="btn-back t-label" data-go="mode">← Назад</button>
+        <h1 class="entry__title">Мультиплеер</h1>
+        <div class="entry__multi is-inactive">
+          <div class="entry__multi-create">
+            <h2 class="t-heading">Создать игру</h2>
+            <p class="entry__muted">Ты станешь организатором.<br>Выбрать шаблон можно будет в лобби.</p>
+            <button type="button" class="btn-primary t-label" style="width: 15.5rem" disabled>Создать игру</button>
           </div>
-          <div class="header-right">
-            <button class="back-btn" onclick="showPage('portfolio')">← Вернуться в портфель</button>
-            <button class="nav-profile" onclick="showPage('portfolio')"></button>
-          </div>
-        </header>
-
-        <!-- HERO + BADGE -->
-        <div class="hero-row">
-          <div class="hero">
-            <div class="main-title">Что хочешь сделать?</div>
-            <div class="sub-title">Выбери действие и финансовый инструмент.</div>
-          </div>
-        </div>
-
-        <!-- MAIN CONTENT -->
-        <div class="trade-main-content">
-
-          <!-- toggle -->
-          <div class="toggle-switch" id="toggleSwitch" style="flex-shrink:0;">
-            <div class="option active" data-value="buy">Купить</div>
-            <div class="option inactive" data-value="sell">Продать</div>
-          </div>
-
-          <!-- сетка -->
-          <div class="content-grid">
-
-            <!-- левая панель -->
-            <div class="assets-panel">
-              <div class="assets-title">Выбери актив</div>
-              <div class="assets-sub">Нажми на категорию, чтобы выбрать конкретный инструмент.</div>
-              <div class="asset-grid">
-                <div class="asset-card active" data-asset="account">
-                  <div class="name">Накопительный счёт</div>
-                  <div class="desc">10% годовых</div>
-                  <div class="arrow">→</div>
-                </div>
-                <div class="asset-card" data-asset="bonds">
-                  <div class="name">Облигации</div>
-                  <div class="desc">ОФЗ · Корпоративные · ВДО</div>
-                  <div class="arrow">→</div>
-                </div>
-                <div class="asset-card" data-asset="pif">
-                  <div class="name">ПИФ</div>
-                  <div class="desc">Паи фонда</div>
-                  <div class="arrow">→</div>
-                </div>
-                <div class="asset-card" data-asset="stocks">
-                  <div class="name">Акции</div>
-                  <div class="desc">Доля компании</div>
-                  <div class="arrow">→</div>
-                </div>
-                <div class="asset-card" data-asset="currency">
-                  <div class="name">Иностранная валюта</div>
-                  <div class="desc">USD</div>
-                  <div class="arrow">→</div>
-                </div>
-                <div class="asset-card" data-asset="gold">
-                  <div class="name">Золото</div>
-                  <div class="desc">1 лот = 1 грамм</div>
-                  <div class="arrow">→</div>
-                </div>
-              </div>
+          <span class="vsep"></span>
+          <div class="entry__multi-join">
+            <h2 class="t-heading">Присоединиться</h2>
+            <div class="field-group">
+              <label class="t-label" for="room-input">Код комнаты</label>
+              <input class="text-field m-body" id="room-input" placeholder="Введи код комнаты" disabled>
             </div>
-
-            <!-- правая панель -->
-            <div class="right-panel">
-
-              <!-- Облигации -->
-              <div class="selection-card" id="bondsSelection">
-                <div class="title">Облигации</div>
-                <div class="sub">Выбери тип</div>
-                <div class="selection-item active" data-bond="ofz">
-                  <span class="name">ОФЗ</span>
-                  <span class="price">- руб.</span>
-                </div>
-                <div class="selection-item inactive" data-bond="corp">
-                  <span class="name">Корпоративные</span>
-                  <span class="price">- руб.</span>
-                </div>
-                <div class="selection-item inactive" data-bond="vdo">
-                  <span class="name">ВДО</span>
-                  <span class="price">- руб.</span>
-                </div>
-              </div>
-
-              <!-- Акции -->
-              <div class="selection-card" id="stocksSelection">
-                <div class="title">Акции</div>
-                <div class="sub">Выбери акции</div>
-                <div class="selection-item active" data-stock="stock1">
-                  <span class="name">Акция1</span>
-                  <span class="price">- ₽ / акция</span>
-                </div>
-                <div class="selection-item inactive" data-stock="stock2">
-                  <span class="name">Акция2</span>
-                  <span class="price">- ₽ / акция</span>
-                </div>
-                <div class="selection-item inactive" data-stock="stock3">
-                  <span class="name">Акция3</span>
-                  <span class="price">- ₽ / акция</span>
-                </div>
-              </div>
-
-              <!-- ПИФ -->
-              <div class="selection-card" id="pifSelection">
-                <div class="title">ПИФ</div>
-                <div class="sub">Выбери фонд</div>
-                <div class="selection-item active" data-pif="pif1">
-                  <span class="name">ПИФ1</span>
-                  <span class="price">- руб. за пай</span>
-                </div>
-                <div class="selection-item inactive" data-pif="pif2">
-                  <span class="name">ПИФ2</span>
-                  <span class="price">- руб. за пай</span>
-                </div>
-              </div>
-
-              <!-- Накопительный счёт -->
-              <div class="asset-info-card visible" id="accountInfo">
-                <div class="title">Накопительный счет</div>
-                <div class="info-row">
-                  <span class="label">Ставка</span>
-                  <span class="value">10% годовых</span>
-                </div>
-              </div>
-
-              <!-- Иностранная валюта -->
-              <div class="asset-info-card" id="currencyInfo">
-                <div class="title">Иностранная валюта</div>
-                <div class="info-row">
-                  <span class="label">USD</span>
-                  <span class="value">- руб. / 1 USD</span>
-                </div>
-              </div>
-
-              <!-- Золото -->
-              <div class="asset-info-card" id="goldInfo">
-                <div class="title">Золото</div>
-                <div class="info-row">
-                  <span class="label">1 грамм</span>
-                  <span class="value">- руб.</span>
-                </div>
-              </div>
-
-              <!-- Панель сделки -->
-              <div class="deal-panel" id="dealPanel">
-                <div class="deal-title">Параметры сделки</div>
-                <div class="deal-label">Выбранный актив</div>
-                <div class="deal-asset-name" id="selectedAssetName">Накопительный счет</div>
-
-                <div class="deal-row">
-                  <div class="deal-left">
-                    <span class="label" id="quantityLabel">Сумма к пополнению/снятию</span>
-                    <div class="deal-input-wrapper">
-                      <input class="deal-input" type="text" value="10 000" id="quantityInput" />
-                      <span class="deal-input-unit" id="unitLabel">₽</span>
-                    </div>
-                  </div>
-                  <div class="deal-right">
-                    <div class="label">Стоимость сделки</div>
-                    <div class="amount" id="totalAmount">10 000 ₽</div>
-                  </div>
-                </div>
-
-                <div class="deal-buttons">
-                  <button class="btn-buy" id="buyBtn">Купить</button>
-                  <button class="btn-sell" id="sellBtn">Продать</button>
-                </div>
-
-                <div class="deal-available">Доступно: 80 000 ₽</div>
-              </div>
-
-            </div> <!-- /right-panel -->
-          </div> <!-- /content-grid -->
-        </div> <!-- /trade-main-content -->
-      </div>
-      <div id="teaching" class="page-section">
-        <!-- HEADER -->
-        <header class="header">
-          <div class="header-left">
-            <span class="kopilka-title">КОПИЛКА</span>
-            <img src="icon.svg" alt=""/>
-          </div>
-          <div class="header-right">
-            <button class="back-btn" onclick="showPage('portfolio')">← Вернуться в портфель</button>
-            <button class="nav-profile" onclick="showPage('portfolio')"></button>
-          </div>
-        </header>
-
-        <!-- HERO + TRIGGER -->
-        <div class="hero-row">
-          <div class="hero">
-            <div class="main-title" id="mainTitle">Накопительный счёт в банке</div>
-            <div class="sub-title" id="subTitle">Разберём инструмент за 60 секунд</div>
-          </div>
-          <div class="example-trigger">
-            <span class="question-circle" id="questionCircle">?</span>
-            <span class="hint-message">Пример</span>
-          </div>
-        </div>
-
-        <!-- MAIN CONTENT -->
-        <div class="teaching-main-content" id="mainContent">
-
-          <div class="content-card" id="contentCard">
-            <!-- актив 1 -->
-            <div class="asset-content active" data-asset="account">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--low">УРОВЕНЬ РИСКА — НИЗКИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Деньги под рукой + проценты</div>
-                    <div class="desc">Это банковский счёт: его можно пополнять и снимать по правилам банка. В игре — каждый день и на максимально доступные суммы.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Ставка зависит от условий банка и экономической ситуации. Высокий процент не всегда означает лучший вариант: сравни условия целиком.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как получить доход</div>
-                    <div class="income-item"><span class="label">01 Проценты</span><div class="desc">Банк начисляет процент на минимальный остаток за период.</div></div>
-                    <div class="income-item"><span class="label">02 В игре</span><div class="desc">Проценты начисляются ежедневно — 10% годовых.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">На что смотреть инвестору</div>
-                    <div class="item"><span class="label">Надёжность важнее красивой ставки</span><div class="desc">Главный риск: банк может не вернуть деньги при банкротстве и отзыве лицензии. В РФ средства в банках-участниках системы страхования вкладов застрахованы до 1,4 млн ₽.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- актив 2: ОФЗ -->
-            <div class="asset-content" data-asset="ofz">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--low">УРОВЕНЬ РИСКА — НИЗКИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Ты даёшь государству деньги в долг</div>
-                    <div class="desc">Облигация — долговая ценная бумага. ОФЗ выпускает Министерство финансов РФ, а инвестор фактически даёт государству деньги на определённый срок.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Риск дефолта: эмитент задерживает или не выплачивает долг. ОФЗ считаются самыми надёжными. Цена ОФЗ может меняться даже при высокой надёжности эмитента.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как получить доход</div>
-                    <div class="income-item"><span class="label">01 Купон</span><div class="desc">Регулярные выплаты: месяц, квартал, полгода или год.</div></div>
-                    <div class="income-item"><span class="label">02 Цена</span><div class="desc">Можно заработать на росте рыночной цены.</div></div>
-                    <div class="income-item"><span class="label">03 Погашение</span><div class="desc">При удержании до срока возвращается номинал.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">На что смотреть инвестору</div>
-                    <div class="item"><span class="label">ОФЗ-ПК</span><div class="desc">Переменный купон может расти вместе со ставками/показателем.</div></div>
-                    <div class="item"><span class="label">ОФЗ-ПД</span><div class="desc">Постоянный доход удобнее планировать при стабильных или снижающихся ставках.</div></div>
-                    <div class="item"><span class="label">Основной фактор</span><div class="desc">Ключевая ставка Банка России и спрос/предложение.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- актив 3: Корпоративные облигации -->
-            <div class="asset-content" data-asset="corp">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--medium">УРОВЕНЬ РИСКА — СРЕДНИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Компания занимает деньги у инвесторов</div>
-                    <div class="desc">Корпоративная облигация — долговая ценная бумага частной или государственной корпорации. Она выпускается на срок и может давать купонный или дисконтный доход.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Надёжность эмитента важна не меньше обещанной доходности. Риск дефолта выше, чем у ОФЗ. Рейтинги помогают оценить надёжность. Есть и процентный риск, а у валютных или привязанных к металлу бумаг — дополнительные риски.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как получить доход</div>
-                    <div class="income-item"><span class="label">01 Купон</span><div class="desc">Периодические процентные выплаты.</div></div>
-                    <div class="income-item"><span class="label">02 Цена</span><div class="desc">Можно заработать на росте рыночной цены.</div></div>
-                    <div class="income-item"><span class="label">03 Погашение</span><div class="desc">Доход часто выше ОФЗ, но надёжность ниже.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">На что смотреть инвестору</div>
-                    <div class="item"><span class="label">Наличие кредитного рейтинга</span><div class="desc">Чем выше рейтинг, тем выше показатель надежности.</div></div>
-                    <div class="item"><span class="label">Наличие долгов</span><div class="desc">Сколько облигаций уже выпущено.</div></div>
-                    <div class="item"><span class="label">Отчетность</span><div class="desc">Финансовое состояние и новости бизнеса.</div></div>
-                    <div class="item"><span class="label">Основной фактор</span><div class="desc">Ставки ЦБ, спрос/предложение и срок до погашения.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- актив 4: ВДО -->
-            <div class="asset-content" data-asset="vdo">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--high">УРОВЕНЬ РИСКА — ВЫСОКИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Высокий купон не бывает бесплатным</div>
-                    <div class="desc">ВДО — облигации компаний со спекулятивными рейтингами или высокой долговой нагрузкой. Они предлагают повышенную доходность.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Покупка ВДО должна соответствовать твоим возможностям и отношению к риску. При финансовой несостоятельности компания может задержать купон или не вернуть основной долг. При банкротстве возврат средств зависит от процедуры и наличия имущества.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как получить доход</div>
-                    <div class="income-item"><span class="label">01 Купон</span><div class="desc">Обычно ставка заметно выше средней по рынку.</div></div>
-                    <div class="income-item"><span class="label">02 Цена</span><div class="desc">Можно заработать на росте рыночной цены.</div></div>
-                    <div class="income-item"><span class="label">03 Погашение</span><div class="desc">Доход значительно выше, но надёжность ниже.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">Что важно помнить</div>
-                    <div class="item"><span class="label">Риск</span><div class="desc">ВДО заметно рискованнее ОФЗ и облигаций инвестиционного уровня.</div></div>
-                    <div class="item"><span class="label">Ставки</span><div class="desc">Рост ставок обычно снижает текущую цену.</div></div>
-                    <div class="item"><span class="label">Дефолт</span><div class="desc">После дефолта цена может стать бросовой.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- актив 5: ПИФ -->
-            <div class="asset-content" data-asset="pif">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--medium">УРОВЕНЬ РИСКА — СРЕДНИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Много инвесторов — один фонд</div>
-                    <div class="desc">Фонд собирает деньги инвесторов и вкладывает их в разные финансовые инструменты. Фонд может специализироваться на акциях, облигациях, отрасли, гособлигациях, металлах или смешанных инвестициях.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Комиссии особенно важны при коротком сроке инвестиций. На пай влияют макроэкономика, расходы УК и стоимость активов внутри фонда.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как получить доход</div>
-                    <div class="income-item"><span class="label">01 Пай</span><div class="desc">Доход — разница между ценой продажи и покупки пая.</div></div>
-                    <div class="income-item"><span class="label">02 Комиссии</span><div class="desc">Важно учитывать управление, ввод и вывод средств.</div></div>
-                    <div class="income-item"><span class="label">03 Форматы</span><div class="desc">ОПИФ, ИПИФ, ЗПИФ и БПИФ отличаются доступностью покупки/продажи.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">Как выбрать</div>
-                    <div class="item"><span class="label">Цель и срок</span><div class="desc">До года; 1–3 года; более 3 лет.</div></div>
-                    <div class="item"><span class="label">Состав</span><div class="desc">Какие активы и стратегия внутри фонда.</div></div>
-                    <div class="item"><span class="label">Комиссии</span><div class="desc">Сколько стоит управление и операции.</div></div>
-                    <div class="item"><span class="label">Уставной капитал</span><div class="desc">Надёжность и репутация управляющей компании.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- актив 6: Акции -->
-            <div class="asset-content" data-asset="stocks">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--high">УРОВЕНЬ РИСКА — ВЫСОКИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Часть компании в твоем портфеле</div>
-                    <div class="desc">Покупая акцию, инвестор становится совладельцем компании. Акция даёт право на часть прибыли и участие в управлении.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Негативные события могут одновременно снизить цену акции и капитал инвестора. Риски: рыночный, эмитента, ликвидности, дивидендный и геополитический.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как получить доход</div>
-                    <div class="income-item"><span class="label">01 Дивиденды</span><div class="desc">Часть прибыли компании, выплачиваемая акционерам.</div></div>
-                    <div class="income-item"><span class="label">02 Рост цены</span><div class="desc">Стоимость акции может вырасти при благоприятном развитии компании.</div></div>
-                    <div class="income-item"><span class="label">03 Важно</span><div class="desc">Дивиденды не гарантированы и не всегда регулярны.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">Как выбрать</div>
-                    <div class="item"><span class="label">Фундаментальный анализ</span><div class="desc">Финансовая отчётность, конкуренты, отрасль и экономика.</div></div>
-                    <div class="item"><span class="label">Технический анализ</span><div class="desc">График цены и индикаторы.</div></div>
-                    <div class="item"><span class="label">Комбинация</span><div class="desc">Подходы можно использовать вместе.</div></div>
-                    <div class="item"><span class="label">Основные факторы</span><div class="desc">Всё, что меняет риски и перспективы бизнеса.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- актив 7: Иностранная валюта -->
-            <div class="asset-content" data-asset="currency">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--high">УРОВЕНЬ РИСКА — ВЫСОКИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Иностранные деньги и инструменты с ними связанные</div>
-                    <div class="desc">Можно покупать наличную валюту, держать валютный счёт или покупать ценные бумаги, номинированные в иностранной валюте.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Курс зависит от рисков и экономик обеих стран. Риски: рыночный, эмитента, ликвидности, дивидендный и геополитический.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как получить доход</div>
-                    <div class="income-item"><span class="label">01 Переоценка</span><div class="desc">В рублях результат зависит от курса покупки и продажи.</div></div>
-                    <div class="income-item"><span class="label">02 Где купить</span><div class="desc">На бирже через брокера или в банке.</div></div>
-                    <div class="income-item"><span class="label">03 Форекс</span><div class="desc">Это сделки-пари на изменение курса, а не покупка реальной валюты.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">Как выбрать</div>
-                    <div class="item"><span class="label">Инфляция</span><div class="desc">Уровень инфляции в странах.</div></div>
-                    <div class="item"><span class="label">Ставки</span><div class="desc">Процентные ставки и политика центральных банков.</div></div>
-                    <div class="item"><span class="label">Дополнительно</span><div class="desc">Геополитика, внутренние трудности и спрос на валюту.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- актив 8: Золото -->
-            <div class="asset-content" data-asset="gold">
-              <div class="asset-grid">
-                <div class="left-column">
-                  <div class="risk-badge risk-badge--medium">УРОВЕНЬ РИСКА — СРЕДНИЙ</div>
-                  <div class="what-section">
-                    <div class="title">Что это?</div>
-                    <div class="sub">Золото — инвестиционный товар</div>
-                    <div class="desc">Раньше валюты имели золотое содержание. Сейчас золото не приравнивается к валютам, но остаётся ценным активом для долгосрочных инвестиций.</div>
-                  </div>
-                  <div class="risk-note">
-                    <div class="title">Риск / важный нюанс</div>
-                    <div class="desc">Доход — рост цены золота минус расходы на покупку, продажу, комиссии, хранение и оценку. Высокий рост цены за короткое время не означает, что она продолжится.</div>
-                  </div>
-                </div>
-                <div class="right-column">
-                  <div class="income-section">
-                    <div class="title">Как инвестировать</div>
-                    <div class="income-item"><span class="label">01 Физическое золото</span><div class="desc">Слитки или монеты.</div></div>
-                    <div class="income-item"><span class="label">02 Безналично</span><div class="desc">ОМС, фонды, фьючерсы и другие инструменты.</div></div>
-                    <div class="income-item"><span class="label">03 Биржа</span><div class="desc">GLDRUB_TOM: расчёты на следующий день, 1 лот = 1 грамм.</div></div>
-                  </div>
-                  <div class="investor-tips">
-                    <div class="title">На что смотреть инвестору</div>
-                    <div class="item"><span class="label">Предложение</span><div class="desc">Объём золотодобычи относительно стабилен.</div></div>
-                    <div class="item"><span class="label">Спрос</span><div class="desc">В кризисы инвесторы чаще ищут способы сохранить деньги.</div></div>
-                    <div class="item"><span class="label">Рынок</span><div class="desc">Итоговая цена формируется спросом и предложением.</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- PAGINATION -->
-          <div class="pagination-wrap">
-            <span class="nav-arrow" id="prevBtn">←</span>
-            <div class="pagination-center">
-              <div class="pagination" id="pagination">
-                <span class="dot active" data-index="0"></span>
-                <span class="dot" data-index="1"></span>
-                <span class="dot" data-index="2"></span>
-                <span class="dot" data-index="3"></span>
-                <span class="dot" data-index="4"></span>
-                <span class="dot" data-index="5"></span>
-                <span class="dot" data-index="6"></span>
-                <span class="dot" data-index="7"></span>
-              </div>
-              <span class="counter" id="pageCounter">1 / 8</span>
-            </div>
-            <span class="nav-arrow" id="nextBtn">→</span>
-          </div>
-        </div>
-
-        <!-- OVERLAY -->
-        <div class="example-overlay" id="exampleOverlay">
-          <div class="overlay-content">
-            <button class="close-btn" id="closeExample">✕</button>
-            <div class="icon-badge">
-              <span class="icon">?</span>
-              <span class="badge">ПРИМЕР</span>
-            </div>
-            <div class="title" id="exampleTitle">Как считается доход за день</div>
-            <div class="desc" id="exampleDesc">
-              Например, если на начало дня на счете было 10000 рублей, потом на него с кошелька была переведена зарплата 10000 рублей, и в этот же день списаны 17000 рублей на покупку облигаций, то минимальный остаток в этот день на счете – 3000 рублей. За этот день процентный доход будет рассчитан: <code>(3000×1×10)/(365×100) = 0,82 рубля.</code>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div id="results" class="page-section">
-        <!-- HEADER -->
-        <header class="header">
-          <div class="header-left">
-            <span class="kopilka-title">КОПИЛКА</span>
-            <img src="icon.svg" alt=""/>
-          </div>
-          <div class="header-right">
-            <button class="nav-profile"></button>
-          </div>
-        </header>
-
-        <!-- HERO -->
-        <div class="hero-row">
-          <div class="hero-left">
-            <div class="main-title">Год завершён!</div>
-            <div class="sub-title">Посмотри, к чему привели твои финансовые решения.</div>
-          </div>
-        </div>
-
-        <!-- MAIN CONTENT -->
-        <div class="results-main-content">
-          <!-- КАРТОЧКА КАПИТАЛА -->
-          <div class="results-capital-card">
-            <div class="capital-left">
-              <div class="label">ТВОЙ ИТОГОВЫЙ КАПИТАЛ</div>
-              <div class="amount">312 480 ₽</div>
-            </div>
-            <div class="capital-center">
-              <div class="growth">+62 480 ₽</div>
-              <div class="percent">+25,0% за год</div>
-            </div>
-            <div class="capital-right">
-              <div class="start">Ты начал(а) с 250 000 ₽</div>
-              <div class="growth-label">Рост капитала</div>
-              <div class="growth-amount">62 480 ₽</div>
-            </div>
-          </div>
-
-          <div class="stats-grid">
-            <div class="stat-card">
-              <div class="label">Было в начале</div>
-              <div class="value">250 000 ₽</div>
-            </div>
-            <div class="stat-card">
-              <div class="label">Стало в конце</div>
-              <div class="value">312 480 ₽</div>
-            </div>
-            <div class="stat-card">
-              <div class="label">Прирост</div>
-              <div class="value">+62 480 ₽</div>
-            </div>
-            <div class="stat-card">
-              <div class="label">Доходность</div>
-              <div class="value">+25,0%</div>
-            </div>
-          </div>
-
-          <!-- СЕТКА РЕЗУЛЬТАТОВ -->
-          <div class="results-grid">
-            <!-- СТРУКТУРА АКТИВОВ -->
-            <div class="structure-panel">
-              <div class="structure-title">Структура активов на конец года</div>
-
-              <div class="bars">
-                <div class="bar bar--1"></div>
-                <div class="bar bar--2"></div>
-                <div class="bar bar--3"></div>
-                <div class="bar bar--4"></div>
-                <div class="bar bar--5"></div>
-                <div class="bar bar--6"></div>
-                <div class="bar bar--7"></div>
-                <div class="bar bar--8"></div>
-              </div>
-
-              <div class="structure-legend">
-                <div class="legend-item">
-                  <span class="dot" style="background:#4AA670;"></span>
-                  <span class="name">Накопительный счёт</span>
-                  <span class="value">12%</span>
-                </div>
-                <div class="legend-item">
-                  <span class="dot" style="background:#0D4F35;"></span>
-                  <span class="name">ОФЗ</span>
-                  <span class="value">24%</span>
-                </div>
-                <div class="legend-item">
-                  <span class="dot" style="background:#C7F26B;"></span>
-                  <span class="name">Корп. облигации</span>
-                  <span class="value">18%</span>
-                </div>
-                <div class="legend-item">
-                  <span class="dot" style="background:#6BB885;"></span>
-                  <span class="name">ВДО</span>
-                  <span class="value">8%</span>
-                </div>
-                <div class="legend-item">
-                  <span class="dot" style="background:#94CC8F;"></span>
-                  <span class="name">Акции</span>
-                  <span class="value">22%</span>
-                </div>
-                <div class="legend-item">
-                  <span class="dot" style="background:#5C8F66;"></span>
-                  <span class="name">Иностранная валюта</span>
-                  <span class="value">6%</span>
-                </div>
-                <div class="legend-item">
-                  <span class="dot" style="background:#ABDBA1;"></span>
-                  <span class="name">ПИФ</span>
-                  <span class="value">5%</span>
-                </div>
-                <div class="legend-item">
-                  <span class="dot" style="background:#40734F;"></span>
-                  <span class="name">Золото</span>
-                  <span class="value">5%</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- ПРАВАЯ КОЛОНКА -->
-            <div class="results-right">
-              <div class="earnings-panel">
-                <div class="earnings-title">Сколько заработано на каждом активе</div>
-
-                <div class="earning-grid">
-                  <div class="earning-col">
-                    <div class="earning-row">
-                      <span class="name">Накопительный счёт</span>
-                      <span class="amount positive">+4 120 ₽</span>
-                    </div>
-                    <div class="earning-row">
-                      <span class="name">Корп. облигации</span>
-                      <span class="amount positive">+8 930 ₽</span>
-                    </div>
-                    <div class="earning-row">
-                      <span class="name">Акции</span>
-                      <span class="amount positive">+28 640 ₽</span>
-                    </div>
-                    <div class="earning-row">
-                      <span class="name">ПИФ</span>
-                      <span class="amount positive">+10 320 ₽</span>
-                    </div>
-                  </div>
-                  <div class="earning-col">
-                    <div class="earning-row">
-                      <span class="name">ОФЗ</span>
-                      <span class="amount positive">+12 480 ₽</span>
-                    </div>
-                    <div class="earning-row">
-                      <span class="name">ВДО</span>
-                      <span class="amount negative">-1 240 ₽</span>
-                    </div>
-                    <div class="earning-row">
-                      <span class="name">Иностранная валюта</span>
-                      <span class="amount negative">-6 570 ₽</span>
-                    </div>
-                    <div class="earning-row">
-                      <span class="name">Золото</span>
-                      <span class="amount positive">+5 800 ₽</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- КНОПКИ ДЕЙСТВИЙ -->
-              <button class="btn-primary" onclick="window.startNewGame()">Играть ещё</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div id="event" class="page-section">
-        <div class="event-screen">
-          <!-- КАРТОЧКА СОБЫТИЯ -->
-          <div class="event-card">
-            <div class="event-icon">🎁</div>
-
-            <div class="event-title">
-              Случилась какоето событие, но я не знаю какое.
-            </div>
-
-            <div class="event-amount">+0 ₽</div>
-
-            <div class="event-desc">Уже думаем что можно сделать</div>
-
-            <button class="event-accept" id="eventAccept">КРУТО!</button>
-          </div>
-        </div>
-      </div>
-      <div id="introduction" class="page-section">
-        <div class="event-screen">
-          <div class="event-card">
-            <div class="event-title">1</div>
-            <div class="event-desc" id="introText">Привет!</div>
-
-            <div class="pagination" id="pagination">
-              <span class="dot unavailable active" data-index="0"></span>
-              <span class="dot unavailable" data-index="1"></span>
-              <span class="dot unavailable" data-index="2"></span>
-              <span class="dot unavailable" data-index="3"></span>
-              <span class="dot unavailable" data-index="4"></span>
-              <span class="dot unavailable" data-index="5"></span>
-              <span class="dot unavailable" data-index="6"></span>
-              <span class="dot unavailable" data-index="7"></span>
-              <span class="dot unavailable" data-index="8"></span>
-
-            </div>
-
-            <button class="event-accept" id="introNext">Дальше</button>
+            <span class="t-caption entry__muted entry__invite">Есть ссылка-приглашение? Она автоматически определит комнату.</span>
+            <button type="button" class="btn-primary t-label" style="width: 15.5rem" disabled>Присоединиться</button>
           </div>
         </div>
       </div>
     </div>
+  </section>
+
+  <header class="header">
+    <div class="brand">
+      <img src="assets/logo.svg" alt="">
+      <span class="t-heading">КОПИЛКА</span>
+    </div>
+
+    <div class="free-money dimmable">
+      <span class="t-caption">Свободные деньги</span>
+      <span class="m-value nowrap" id="free-money"></span>
+    </div>
+
+    <div class="capital dimmable">
+      <div class="switch t-caption" id="capital-switch">
+        <button type="button" class="is-active" data-mode="capital">Капитал</button>
+        <button type="button" data-mode="profit">Прибыль</button>
+      </div>
+      <span class="m-metric nowrap" id="capital-value"></span>
+    </div>
+
+    <div class="month dimmable">
+      <span class="m-control month__title" id="month-title"></span>
+      <div class="month__days" id="month-days"></div>
+      <div class="month__paydays t-caption" id="month-paydays"></div>
+    </div>
+
+    <!-- Рейтинг нужен только в мультиплеере: в одиночной игре скрыт, но занимает место -->
+    <div class="rating" id="rating">
+      <span class="t-caption">Рейтинг</span>
+      <span class="m-body">#— / —</span>
+    </div>
+
+    <!-- Профиль пока ничего не делает -->
+    <div class="profile">
+      <span class="avatar t-label" id="player-initial">И</span>
+      <span class="t-label" id="player-name">Игрок</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="panel">
+      <div class="field" id="field"></div>
+
+      <article class="learn raised" id="learn" hidden>
+        <div class="learn__head">
+          <div>
+            <div class="learn__title-row">
+              <h1 class="learn__title" id="learn-title"></h1>
+              <span class="risk t-label" id="learn-risk"></span>
+            </div>
+            <p class="learn__subtitle">Разберём инструмент за 60 секунд</p>
+          </div>
+          <div class="switch t-caption" id="learn-tabs" hidden></div>
+        </div>
+
+        <div class="learn__body" id="learn-body"></div>
+
+        <div class="learn__footer">
+          <span class="t-caption">Обучение</span>
+          <button type="button" class="btn-accent t-label" id="learn-close">К торгам</button>
+        </div>
+      </article>
+    </section>
+
+    <!-- Информационная панель: новости подключены, график «Общий рынок» пока статичный пример из макета -->
+    <aside class="info">
+      <div class="market is-inactive">
+        <div class="market__title">
+          <span class="t-heading">Общий рынок</span>
+          <span class="m-metric up">+1,2%</span>
+        </div>
+        <svg class="chart market__plot" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <polygon fill="url(#grad-market)" points="0,100 0,87 7,75 14,80 21,62 29,57 36,65 43,45 50,53 57,33 64,38 71,18 79,26 86,4 93,9 100,0 100,100"/>
+          <polyline fill="none" stroke="#397E62" stroke-width="2" vector-effect="non-scaling-stroke" points="0,87 7,75 14,80 21,62 29,57 36,65 43,45 50,53 57,33 64,38 71,18 79,26 86,4 93,9 100,0"/>
+        </svg>
+        <div class="market__timeline m-caption">
+          <span>Месяц 1</span>
+          <span>7 / 12</span>
+        </div>
+      </div>
+
+      <div class="news">
+        <h2 class="t-heading">Новости</h2>
+        <div class="news__list" id="news"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ===== Итоги года (Final / Singleplayer) ===== -->
+  <section class="final" id="final">
+    <header class="final__header">
+      <span class="logo-dark" aria-hidden="true"></span>
+      <span class="t-heading">КОПИЛКА</span>
+      <span class="final__status t-label">Игра завершена</span>
+    </header>
+
+    <div>
+      <h1 class="entry__title">Итоги года</h1>
+      <p class="entry__muted">12 месяцев финансовых решений</p>
+    </div>
+
+    <div class="summary">
+      <div class="summary__primary">
+        <div class="summary__item">
+          <span>Итоговый портфель</span>
+          <span class="summary__capital" id="final-capital"></span>
+        </div>
+        <div class="summary__item">
+          <span>Заработано на инвестициях</span>
+          <span class="summary__profit" id="final-profit"></span>
+        </div>
+        <!-- Рейтинг нужен только в мультиплеере: в одиночной игре скрыт, но занимает место -->
+        <div class="summary__item summary__rank" id="final-rank">
+          <span class="summary__small">Твоё место в рейтинге</span>
+          <span class="m-value summary__accent">—</span>
+          <span class="summary__small summary__faded">из — участников</span>
+        </div>
+      </div>
+      <div class="summary__rule"></div>
+      <div class="summary__sources">
+        <div class="summary__item summary__item--small">
+          <span class="summary__small">Авансы и зарплаты за игру</span>
+          <span class="m-metric" id="final-wages"></span>
+        </div>
+        <div class="summary__item summary__item--small">
+          <span class="summary__small">Жизненные ситуации</span>
+          <span class="m-metric" id="final-events"></span>
+        </div>
+        <div class="summary__item summary__item--small summary__note">
+          <span class="t-label">12 месяцев финансовых решений</span>
+          <span class="summary__small summary__faded">Выплаты и жизненные события учтены отдельно от результата инвестиций.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="report raised">
+      <h2 class="t-heading">Структура активов</h2>
+      <div class="composition" id="final-composition"></div>
+      <div class="legend" id="final-legend"></div>
+      <div class="report__rule"></div>
+      <div class="results">
+        <div class="results__column" id="final-gains"></div>
+        <span class="vsep"></span>
+        <div class="results__column" id="final-losses"></div>
+      </div>
+      <div class="report__rule"></div>
+      <!-- Тот же рейтинг инструментов, но относительный: результат в % от вложенного -->
+      <div class="results">
+        <div class="results__column" id="final-gains-pct"></div>
+        <span class="vsep"></span>
+        <div class="results__column" id="final-losses-pct"></div>
+      </div>
+    </div>
+
+    <div class="history">
+      <div class="history__heading">
+        <span class="t-label entry__muted">На каких данных ты играл?</span>
+        <h2 class="entry__title" id="final-period"></h2>
+      </div>
+      <div class="history__grid" id="final-history"></div>
+    </div>
+
+    <div class="final__footer">
+      <div>
+        <h2 class="t-heading">Готов к новой игре?</h2>
+        <p class="entry__muted">Попробуй другую стратегию и сравни результаты.</p>
+      </div>
+      <button type="button" class="btn-primary t-label" id="final-restart" style="width: 14rem">Начать новую игру</button>
+    </div>
+  </section>
+
+  <div class="toasts" id="toasts"></div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="life-event raised">
+      <span class="t-label" id="modal-type"></span>
+      <span class="life-event__icon" id="modal-icon"></span>
+      <h2 class="t-heading" id="modal-title"></h2>
+      <span class="life-event__amount" id="modal-amount"></span>
+      <p class="life-event__text" id="modal-text"></p>
+      <button type="button" class="btn-confirm t-label" id="modal-confirm"></button>
+    </div>
   </div>
 
-  <div class="toast" id="toast"></div>
-  
-  <script>
-    const toastEl    = document.getElementById('toast');
-
-
-    function showPage(pageId, args = {}) {
-      // 1. Скрываем все секции
-      document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
-      // 2. Показываем нужную
-      document.getElementById(pageId).classList.add('active');
-
-      if (pageId === 'portfolio' && globalThis.refreshPortfolio) {
-        Promise.resolve(globalThis.refreshPortfolio()).catch((error) => {
-          console.error('Ошибка обновления портфеля при открытии страницы:', error);
-        });
-      }
-
-      if (pageId === 'trade' && globalThis.refreshTradeView) {
-        Promise.resolve(globalThis.refreshTradeView()).catch((error) => {
-          console.error('Ошибка обновления торговли при открытии страницы:', error);
-        });
-      }
-
-      if (pageId === 'teaching' && globalThis.refreshTeachingView) {
-        Promise.resolve(globalThis.refreshTeachingView(args.index)).catch((error) => {
-          console.error('Ошибка обновления обучения при открытии страницы:', error);
-        });
-      }
-    }
-    let toastTimer = null;
-    function showToast(message, type = '') {
-        toastEl.textContent = message;
-        toastEl.className = 'toast show ' + type;
-
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => {
-            toastEl.className = 'toast ' + type;
-        }, 2000);
-    }
-    function playAnimation(el, className, duration) {
-        el.classList.remove(className);
-        void el.offsetWidth; // форсируем reflow — иначе анимация не перезапустится
-        el.classList.add(className);
-
-        setTimeout(() => el.classList.remove(className), duration);
-    }
-  </script>
   <script type="module" src="./script.js"></script>
 </body>
 </html>
