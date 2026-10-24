@@ -841,6 +841,7 @@ function openLesson(key, unlocking = ui.lesson?.unlocking ?? null) {
   ui.lesson = { key, unlocking };
 
   $('learn-title').textContent = lesson.title;
+  $('learn-subtitle').textContent = lesson.subtitle;
   const risk = $('learn-risk');
   risk.textContent = riskNames[lesson.risk];
   risk.className = `risk t-label risk--${lesson.risk}`;
