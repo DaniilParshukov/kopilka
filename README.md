@@ -2,7 +2,7 @@
 
 ![картинка](assets/logo.svg)
 
-Играть по ссылке: [https://daniilparshukov.github.io/game/](https://daniilparshukov.github.io/game/)
+Играть по ссылке: [https://daniilparshukov.github.io/kopilka/](https://daniilparshukov.github.io/kopilka/)
 
 
 
