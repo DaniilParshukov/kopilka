@@ -622,7 +622,8 @@ export class GameEngine {
         return months.map((month, i) => {
             const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
             const day = Math.min(this.getRandomEventDay(), daysInMonth);
-            return { date: new Date(month.getFullYear(), month.getMonth(), day), type: types[i] };
+            const pool = types[i] === 'good' ? this.goodEvents : this.badEvents;
+            return { date: new Date(month.getFullYear(), month.getMonth(), day), type: types[i], index: Math.floor(Math.random() * pool.length) };
         });
     }
 
@@ -642,9 +643,9 @@ export class GameEngine {
             const isGood = eventInfo.type === 'good';
 
 
-            // Выбираем случайное событие из соответствующего списка
+            // Событие выбрано заранее в planLifeEvents; в старых сохранениях индекса нет — выбираем случайное
             const eventPool = isGood ? this.goodEvents : this.badEvents;
-            const randomIndex = Math.floor(Math.random() * eventPool.length);
+            const randomIndex = eventInfo.index ?? Math.floor(Math.random() * eventPool.length);
             const selectedEvent = eventPool[randomIndex];
 
             return {

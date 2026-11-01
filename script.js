@@ -3,70 +3,31 @@ import { LocalStorageAdapter } from './core/LocalStorageAdapter.js';
 import { LocalPrices } from './prices/LocalPrices.js';
 import { lessons, lessonTabs, riskNames } from './lessons.js';
 import { loadNews } from './news.js';
+import { MultiplayerClient, multiplayerUrl } from './multiplayer.js';
+import {
+  CATEGORIES, LOBBY_MAX_PLAYERS, MONTHS_TOTAL, ROOM_CODE_LENGTH, START_CASH, TEMPLATES,
+  categoryIsOpen, initialCards, monthIndex as gameMonthIndex, newPortfolio, parseTickerRows,
+  pickTickers, slotName, tickerDisplayName
+} from './core/setup.js';
 
 // ===== Настройки =====
 
 const GAME_ID = 'player';       // одно сохранение на браузер
 const PLAYER_KEY = 'copilka-player-name';
-const START_CASH = 10000;
+const ROOM_KEY = 'copilka-room';  // { code, token } текущей комнаты мультиплеера
 const SALARY_DAYS = [[10, 'Аванс'], [25, 'Зарплата']];
-const MONTHS_TOTAL = 12;
 const CHART_DAYS = 30;          // окно мини-графиков и изменения цены
 const QUANTITIES = ['1', '25', '50', 'MAX'];
 const CARD_STATES = ['active', 'locked', 'unlock'];
-
-// Шаблоны одиночной игры (экран «Выбери шаблон игры»)
-const TEMPLATES = {
-  training: { dayMs: 4000, openAll: false, lifeEvents: 'normal' },
-  advanced: { dayMs: 3000, openAll: true, lifeEvents: 'high' }
-};
+// В мультиплеере время идёт у всех одинаково: эти причины его не останавливают
+const LOCAL_PAUSES = ['lesson', 'modal', 'hidden'];
 
 // Ряды игрового поля
 const LAYOUT = [
   ['savings', 'bonds'],
-  ['funds', 'currency'],
-  ['stocks', 'gold']
+  ['funds', 'currency', 'gold'],
+  ['stocks']
 ];
-
-// opensAt — игровой месяц, с которого категорию можно открыть.
-// slots — инструменты карточки; role связывает слот с тикером в game.tickers.
-const CATEGORIES = {
-  savings: { title: 'Накопительный счёт', lesson: 'savings', opensAt: 1 },
-  bonds: {
-    title: 'Облигации', lesson: 'ofz', opensAt: 2,
-    slots: [
-      { role: 'ofz', name: 'ОФЗ', unit: 'шт.' },
-      { role: 'corp', name: 'Корпоративная', unit: 'шт.', title: 'Корпоративные облигации', short: 'Корп. облигации' },
-      { role: 'vdo', name: 'ВДО', unit: 'шт.' }
-    ]
-  },
-  funds: {
-    title: 'ПИФы', lesson: 'funds', opensAt: 3,
-    slots: [
-      { role: 'fund1', name: 'ПИФ 1', unit: 'pai' },
-      { role: 'fund2', name: 'ПИФ 2', unit: 'pai' }
-    ]
-  },
-  stocks: {
-    title: 'Акции', lesson: 'stocks', opensAt: 4,
-    slots: [
-      { role: 'stock1', name: 'Акция 1', unit: 'шт.' },
-      { role: 'stock2', name: 'Акция 2', unit: 'шт.' },
-      { role: 'stock3', name: 'Акция 3', unit: 'шт.' }
-    ]
-  },
-  currency: {
-    title: 'Валюта', lesson: 'currency', opensAt: 5,
-    slots: [
-      { role: 'usd', name: 'Доллар / USD', unit: '$' },
-      { role: 'cny', name: 'Юань / CNY', unit: '¥', inactive: true } // данных по юаню нет — временно неактивен
-    ]
-  },
-  gold: {
-    title: 'Золото', lesson: 'gold', opensAt: 6,
-    slots: [{ role: 'gold', name: '1 лот = 1 г', unit: 'г', title: 'Золото' }]
-  }
-};
 
 const LESSON_CATEGORY = {
   savings: 'savings', ofz: 'bonds', corp: 'bonds', vdo: 'bonds',
@@ -89,7 +50,8 @@ const ui = {
   pause: new Set(),     // причины паузы: lesson, modal, hidden, console, finished
   updaters: [],         // обновление значений карточек без перестройки DOM
   news: [],             // новости игрового года (с псевдонимами), по возрастанию даты
-  newsShown: 0          // сколько новостей уже выведено в ленту
+  newsShown: 0,         // сколько новостей уже выведено в ленту
+  eventQueue: []        // мультиплеер: жизненные события, которые игрок ещё не видел
 };
 
 const $ = (id) => document.getElementById(id);
@@ -223,13 +185,12 @@ function toast(message, type = '') {
 
 // ===== Цены и тикеры =====
 
+function instrumentName(slot) {
+  return slotName(game.tickers, slot);
+}
+
 function tickerName(ticker) {
-  for (const category of Object.values(CATEGORIES)) {
-    for (const slot of category.slots || []) {
-      if (game?.tickers[slot.role] === ticker) return slot.name;
-    }
-  }
-  return ticker;
+  return tickerDisplayName(game?.tickers, ticker);
 }
 
 function currentPrice(ticker) {
@@ -254,57 +215,17 @@ function dailyChange(ticker) {
 async function loadTickerRows() {
   const response = await fetch('prices/tickers.csv');
   if (!response.ok) throw new Error('Не удалось загрузить tickers.csv');
-  const byYear = {};
-  for (const line of (await response.text()).split(/\r?\n/)) {
-    const [year, name, ticker, , reliable] = line.split(',').map((s) => s.trim());
-    if (!/^\d{4}$/.test(year) || !ticker) continue;
-    (byYear[year] ||= []).push({ name, ticker, reliable: reliable === '+' });
-  }
-  return byYear;
-}
-
-function shuffle(items) {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
-// Строки года в tickers.csv: 1-я — ОФЗ, 2–5 — корпоративные (надёжные) и ВДО, дальше акции,
-// в конце банк, золото, доллар и два фонда.
-function pickTickers(rows) {
-  const has = (ticker) => prices.getHistory(ticker).length > 0;
-  const special = new Set(['BANK', 'GLDRUB', 'USD']);
-  const bonds = rows.slice(1, 5);
-  const funds = rows.filter((r) => r.name.startsWith('Фонд') && has(r.ticker));
-  const stocks = shuffle(rows.slice(5).filter((r) => !special.has(r.ticker) && !funds.includes(r) && has(r.ticker)));
-  const corp = shuffle(bonds.filter((r) => r.reliable))[0] || bonds[0];
-  const vdo = shuffle(bonds.filter((r) => !r.reliable))[0] || bonds[bonds.length - 1];
-
-  const picked = {
-    ofz: rows[0], corp, vdo,
-    fund1: funds[0], fund2: funds[1],
-    stock1: stocks[0], stock2: stocks[1], stock3: stocks[2],
-    usd: rows.find((r) => r.ticker === 'USD'),
-    gold: rows.find((r) => r.ticker === 'GLDRUB')
-  };
-
-  const tickers = { bank: 'BANK' };
-  const titles = {};
-  for (const [role, row] of Object.entries(picked)) {
-    if (!row) continue;
-    tickers[role] = row.ticker;
-    titles[role] = row.name;
-  }
-  return { tickers, titles };
+  return parseTickerRows(await response.text());
 }
 
 // ===== Игра =====
 
+function isMulti() {
+  return game?.mode === 'multi';
+}
+
 function monthIndex(date = game.date) {
-  return (date.getFullYear() - game.year) * 12 + date.getMonth() - 8;
+  return gameMonthIndex(date, game.year);
 }
 
 function sumHistory(...types) {
@@ -320,14 +241,21 @@ function capital() {
   return engine.getTotalValue(game.portfolio);
 }
 
+// Возвращает true, если какая-то карточка стала доступна
 function updateCardAvailability() {
-  const month = monthIndex() + 1;
+  let changed = false;
   for (const [key, category] of Object.entries(CATEGORIES)) {
-    if (category.opensAt <= month && game.cards[key] === 'locked') game.cards[key] = 'unlock';
+    if (categoryIsOpen(category, game.date, game.year) && game.cards[key] === 'locked') {
+      game.cards[key] = 'unlock';
+      changed = true;
+    }
   }
+  return changed;
 }
 
 async function save() {
+  // Партию мультиплеера хранит сервер; одиночное сохранение она не затирает
+  if (isMulti()) return;
   try {
     await storage.saveGame(GAME_ID, game);
   } catch (error) {
@@ -352,12 +280,12 @@ async function createGame(templateKey, player) {
     template: templateKey,
     dayMs: template.dayMs,
     lifeEvents: template.lifeEvents,
-    portfolio: { cash: START_CASH, bankBalance: 0, assets: {}, assetValues: {} },
+    portfolio: newPortfolio(),
     history: [],
     monthlyEvents: {},
     pendingEvent: null,
-    ...pickTickers(byYear[year]),
-    cards: Object.fromEntries(Object.keys(CATEGORIES).map((key) => [key, template.openAll ? 'active' : 'locked'])),
+    ...pickTickers(byYear[year], prices),
+    cards: initialCards(template),
     finished: false
   };
   updateCardAvailability();
@@ -370,19 +298,31 @@ async function loadGame() {
   game = saved;
   prices = await LocalPrices.create(String(game.year));
   engine.prices = prices;
+  await addMissingStock();
   return true;
 }
 
-async function advanceDay() {
-  if (!game || game.finished || ui.pause.size) return;
+// В старых сохранениях акций три: добираем четвёртую, которой ещё нет в партии
+async function addMissingStock() {
+  if (game.tickers.stock4) return;
+  const byYear = await loadTickerRows();
+  const { tickers, titles } = pickTickers(byYear[game.year], prices);
+  const held = Object.values(game.tickers);
+  const role = ['stock1', 'stock2', 'stock3', 'stock4'].find((r) => tickers[r] && !held.includes(tickers[r]));
+  if (!role) return;
+  game.tickers.stock4 = tickers[role];
+  game.titles.stock4 = titles[role];
+}
 
-  const previousMonth = monthIndex();
+async function advanceDay() {
+  // В мультиплеере дни приходят с сервера (applyTick)
+  if (!game || game.finished || isMulti() || ui.pause.size) return;
+
   engine.nextDay(game);
 
   if (monthIndex() >= MONTHS_TOTAL) {
     finishGame();
-  } else if (monthIndex() !== previousMonth) {
-    updateCardAvailability();
+  } else if (updateCardAvailability()) {
     renderField();
   }
 
@@ -404,7 +344,7 @@ async function initNews() {
   const aliases = {};
   for (const slot of CATEGORIES.stocks.slots) {
     const ticker = game.tickers[slot.role];
-    if (ticker) aliases[ticker] = slot.name;
+    if (ticker) aliases[ticker] = instrumentName(slot);
   }
   try {
     ui.news = await loadNews(game.year, aliases);
@@ -443,6 +383,7 @@ function renderNews() {
 }
 
 function setPaused(reason, paused) {
+  if (paused && isMulti() && LOCAL_PAUSES.includes(reason)) return;
   if (paused) ui.pause.add(reason);
   else ui.pause.delete(reason);
   document.body.classList.toggle('is-paused', ui.pause.size > 0);
@@ -476,7 +417,7 @@ function renderMonth() {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const today = game.finished ? daysInMonth + 1 : date.getDate();
 
-  $('month-title').textContent = `Месяц ${index + 1} / ${MONTHS_TOTAL}`;
+  renderMonthTitle(index);
 
   const days = $('month-days');
   days.innerHTML = '';
@@ -492,6 +433,11 @@ function renderMonth() {
     mark.style.left = `${((day - 0.5) / daysInMonth) * 100}%`;
     paydays.append(mark);
   }
+}
+
+function renderMonthTitle(index = Math.min(monthIndex(), MONTHS_TOTAL - 1)) {
+  const status = ui.pause.has('connection') ? ' · нет связи' : ui.pause.has('server') ? ' · пауза' : '';
+  $('month-title').textContent = `Месяц ${index + 1} / ${MONTHS_TOTAL}${status}`;
 }
 
 // ===== Карточки =====
@@ -673,6 +619,10 @@ function submitSavings(mode, raw) {
     toast('Введите сумму больше нуля', 'error');
     return;
   }
+  if (isMulti()) {
+    void submitMultiSavings(mode, amount);
+    return;
+  }
   try {
     if (mode === 'deposit') engine.openBank(game, amount);
     else engine.withdrawBank(game, amount);
@@ -689,7 +639,7 @@ function submitSavings(mode, raw) {
 
 function renderInstrument(slot) {
   const ticker = game.tickers[slot.role];
-  const isInactive = slot.inactive || !ticker;
+  const isInactive = !ticker;
   const box = el('div', `instrument${isInactive ? ' is-inactive' : ''}`);
 
   const head = el('div');
@@ -699,7 +649,7 @@ function renderInstrument(slot) {
   const defaultBadge = el('span', 'default-badge t-label', 'Дефолт');
   defaultBadge.hidden = true;
   quote.append(price, defaultBadge, change);
-  head.append(el('div', 't-label', slot.name), quote);
+  head.append(el('div', 't-label', instrumentName(slot)), quote);
 
   const terms = el('div', 'terms');
   const chart = chartElement();
@@ -807,6 +757,11 @@ function tradeAsset(slot, action) {
     return;
   }
 
+  if (isMulti()) {
+    void tradeMulti(slot, action, selected === 'MAX' ? 'MAX' : amount);
+    return;
+  }
+
   try {
     if (isBuy) engine.buyAsset(game, ticker, amount);
     else engine.sellAsset(game, ticker, amount);
@@ -815,7 +770,7 @@ function tradeAsset(slot, action) {
     return;
   }
 
-  toast(`${isBuy ? 'Куплено' : 'Продано'}: ${slot.name}, ${formatUnits(amount, slot.unit)}`, 'success');
+  toast(`${isBuy ? 'Куплено' : 'Продано'}: ${instrumentName(slot)},${formatUnits(amount, slot.unit)}`, 'success');
   refresh();
   void save();
 }
@@ -881,6 +836,7 @@ function closeLesson() {
 
   if (unlocking && game.cards[unlocking] === 'unlock') {
     game.cards[unlocking] = 'active';
+    if (isMulti()) net?.send({ type: 'card', key: unlocking });
     renderField();
     refresh();
     void save();
@@ -925,6 +881,11 @@ function showLifeEvent(event) {
     text: event.text,
     buttonText: event.buttonText || 'Понятно!',
     onConfirm: () => {
+      // В мультиплеере сервер уже применил событие: окно только сообщает о нём
+      if (isMulti()) {
+        showNextLifeEvent();
+        return;
+      }
       engine.changeCash(game, event.amount);
       game.pendingEvent = null;
       refresh();
@@ -965,8 +926,8 @@ function finalRows() {
       const entry = portfolio.assetValues[game.tickers[slot.role]];
       rows.push({
         role: slot.role,
-        title: slot.title || slot.name,
-        short: slot.short || slot.title || slot.name,
+        title: slot.title || instrumentName(slot),
+        short: slot.short || slot.title || instrumentName(slot),
         group,
         value: entry?.value || 0,
         invested: entry?.invested || 0,
@@ -990,7 +951,9 @@ function renderFinal() {
   $('final-wages').textContent = money(START_CASH + sumHistory('SALARY'));
   $('final-events').textContent = money(events, true);
   $('final-events').className = `m-metric ${Math.round(events) < 0 ? 'down' : ''}`;
-  $('final-rank').classList.toggle('is-hidden', game.mode !== 'multi');
+  $('final-rank').classList.toggle('is-hidden', !isMulti());
+  $('final-rank-place').textContent = isMulti() ? `#${game.rank}` : '—';
+  $('final-rank-total').textContent = isMulti() ? `из ${game.playersTotal}` : 'из —';
 
   const rows = finalRows();
   renderComposition(rows, total);
@@ -1094,8 +1057,8 @@ function renderHistory() {
   for (const key of ['bonds', 'funds', 'stocks', 'currency', 'gold']) {
     for (const slot of CATEGORIES[key].slots) {
       const ticker = game.tickers[slot.role];
-      if (!ticker || slot.inactive) continue;
-      cards.push({ role: slot.role, title: game.titles[slot.role] || ticker, slotName: slot.title || slot.name, ticker });
+      if (!ticker) continue;
+      cards.push({ role: slot.role, title: game.titles[slot.role] || ticker, slotName: slot.title || instrumentName(slot), ticker });
     }
   }
 
@@ -1142,8 +1105,9 @@ function renderAll() {
   document.documentElement.style.setProperty('--day-ms', `${game.dayMs || TEMPLATES.training.dayMs}ms`);
   const player = game.player || 'Игрок';
   $('player-name').textContent = player;
-  $('rating').classList.toggle('is-hidden', game.mode !== 'multi');
+  $('rating').classList.toggle('is-hidden', !isMulti());
   $('player-initial').textContent = player[0].toUpperCase();
+  renderRating();
   renderField();
   renderMonth();
   refresh();
@@ -1153,7 +1117,8 @@ function renderAll() {
 // После окончания игры — новая партия с выбора режима (имя уже известно)
 async function restart() {
   closeLessonSilently();
-  await storage.deleteGame(GAME_ID);
+  if (isMulti()) leaveMultiplayer();
+  else await storage.deleteGame(GAME_ID);
   ui.savingsForm = null;
   setPaused('finished', false);
   document.body.classList.remove('is-final');
@@ -1167,8 +1132,12 @@ async function restart() {
 
 // ===== Вступительные экраны =====
 
-const ENTRY_PAGES_WITH_NAME = ['mode', 'solo', 'multi'];
+const ENTRY_PAGES_WITH_NAME = ['mode', 'solo', 'multi', 'lobby'];
 let selectedTemplate = 'training';
+let lobby = null;   // { code, template, players: [{ name, ready, isHost, isSelf }] }
+let net = null;     // соединение с сервером мультиплеера
+const room = { code: null, token: null, resolveResume: null, inviteCode: null };
+let serverQueue = Promise.resolve();
 
 function playerName() {
   try {
@@ -1193,6 +1162,8 @@ function showEntry(page) {
     requestAnimationFrame(() => input.focus());
   }
   if (page === 'solo') renderTemplates();
+  if (page === 'multi') renderMultiPage();
+  if (page === 'lobby') renderLobby();
 }
 
 function hideEntry() {
@@ -1224,6 +1195,411 @@ async function startNewGame() {
   renderAll();
 }
 
+// ===== Соединение с сервером =====
+// Портфель, дни и рейтинг считает сервер: браузер отправляет заявки и показывает то, что пришло.
+
+function savedRoom() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ROOM_KEY));
+    return saved?.code && saved?.token ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveRoom() {
+  try {
+    localStorage.setItem(ROOM_KEY, JSON.stringify({ code: room.code, token: room.token }));
+  } catch (error) {
+    console.warn('Не удалось запомнить комнату:', error);
+  }
+}
+
+function forgetRoom() {
+  room.code = null;
+  room.token = null;
+  try {
+    localStorage.removeItem(ROOM_KEY);
+  } catch (error) {
+    console.warn('Не удалось забыть комнату:', error);
+  }
+}
+
+function randomToken() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function setConnecting(isConnecting) {
+  $('create-room').disabled = isConnecting;
+  renderMultiPage(isConnecting);
+}
+
+function closeConnection() {
+  net?.close();
+  net = null;
+}
+
+// Без кода комнаты сервер создаёт новую, с кодом — впускает или возвращает игрока с этим токеном
+function connectToServer() {
+  closeConnection();
+  const url = multiplayerUrl();
+  if (!url) {
+    toast('Сервер мультиплеера пока не подключён', 'error');
+    settleResume(false);
+    return false;
+  }
+  setConnecting(true);
+  net = new MultiplayerClient(url, {
+    hello: () => {
+      const base = { name: playerName() || 'Игрок', token: room.token };
+      return room.code ? { ...base, type: 'join', code: room.code } : { ...base, type: 'create' };
+    },
+    onMessage: (message) => {
+      serverQueue = serverQueue.then(() => handleServerMessage(message)).catch((error) => {
+        console.error('Ошибка обработки сообщения сервера:', error);
+      });
+    },
+    onFailed: () => {
+      net = null;
+      setConnecting(false);
+      toast('Не удалось подключиться к серверу', 'error');
+      settleResume(false);
+    },
+    onLost: () => {
+      setPaused('connection', true);
+      if (game) renderMonthTitle();
+      toast('Нет связи с сервером, переподключаемся…', 'error');
+    },
+    onRestored: () => {
+      setPaused('connection', false);
+      if (game) renderMonthTitle();
+    }
+  });
+  return true;
+}
+
+function settleResume(isResumed) {
+  const resolve = room.resolveResume;
+  room.resolveResume = null;
+  resolve?.(isResumed);
+}
+
+// Возврат в комнату после перезагрузки страницы
+function resumeRoom({ code, token }) {
+  room.code = code;
+  room.token = token;
+  return new Promise((resolve) => {
+    room.resolveResume = resolve;
+    connectToServer();
+  });
+}
+
+function createRoom() {
+  forgetRoom();
+  room.token = randomToken();
+  connectToServer();
+}
+
+function joinRoom() {
+  const code = $('room-input').value.trim().toUpperCase();
+  if (code.length !== ROOM_CODE_LENGTH) return;
+  const saved = savedRoom();
+  room.code = code;
+  room.token = saved?.code === code ? saved.token : randomToken();
+  connectToServer();
+}
+
+function leaveMultiplayer() {
+  net?.send({ type: 'leave' });
+  closeConnection();
+  forgetRoom();
+  lobby = null;
+  ui.eventQueue = [];
+  setPaused('server', false);
+  setPaused('connection', false);
+}
+
+async function handleServerMessage(message) {
+  if (message.type === 'lobby') {
+    enterLobby(message);
+  } else if (message.type === 'game') {
+    await enterMultiGame(message);
+  } else if (message.type === 'tick') {
+    applyTick(message);
+  } else if (message.type === 'paused') {
+    applyPaused(message);
+  } else if (message.type === 'error') {
+    await handleServerError(message);
+  }
+}
+
+async function handleServerError({ message, fatal }) {
+  toast(message, 'error');
+  if (!fatal) return;
+  // Комнаты больше нет или войти нельзя: возвращаемся на экран мультиплеера
+  const isResuming = Boolean(room.resolveResume);
+  const wasPlaying = isMulti();
+  closeConnection();
+  forgetRoom();
+  lobby = null;
+  setConnecting(false);
+  setPaused('connection', false);
+  if (isResuming) {
+    settleResume(false);
+  } else if (wasPlaying) {
+    await restart();
+  } else {
+    showEntry('multi');
+  }
+}
+
+function roomEntered(code) {
+  room.code = code;
+  saveRoom();
+  setConnecting(false);
+  if (room.inviteCode) {
+    room.inviteCode = null;
+    history.replaceState(null, '', location.pathname);
+  }
+  settleResume(true);
+}
+
+function enterLobby({ code, template, selfId, hostId, players }) {
+  lobby = {
+    code,
+    template,
+    players: players.map(({ id, name, ready }) => ({ name, ready, isHost: id === hostId, isSelf: id === selfId }))
+  };
+  roomEntered(code);
+  showEntry('lobby');
+}
+
+async function enterMultiGame(snapshot) {
+  const { code, year, template, dayMs, day, name, tickers, titles, portfolio, history, cards, paused, finished, rank, playersTotal, isHost } = snapshot;
+  if (!prices || prices.year !== String(year)) prices = await LocalPrices.create(String(year));
+  engine.prices = prices;
+  lobby = null;
+
+  game = {
+    year,
+    date: new Date(year, 8, 1 + day),
+    player: name,
+    mode: 'multi',
+    template,
+    dayMs,
+    portfolio,
+    history,
+    tickers,
+    titles,
+    cards,
+    finished: false,
+    rank,
+    playersTotal,
+    isHost
+  };
+  LOCAL_PAUSES.forEach((reason) => setPaused(reason, false));
+  updateCardAvailability();
+  roomEntered(code);
+  hideEntry();
+  setPaused('server', paused);
+  renderAll();
+  if (finished) finishMultiGame();
+}
+
+function applyTick({ day, portfolio, history, notices, events, rank, playersTotal, finished }) {
+  if (!isMulti() || game.finished) return;
+  game.date = new Date(game.year, 8, 1 + day);
+  game.portfolio = portfolio;
+  game.history.push(...history);
+  game.rank = rank;
+  game.playersTotal = playersTotal;
+
+  for (const { message, kind } of notices) toast(message, kind);
+  ui.eventQueue.push(...events);
+  if (finished) {
+    finishMultiGame();
+    return;
+  }
+  if (updateCardAvailability()) renderField();
+  renderMonth();
+  renderRating();
+  refresh();
+  renderNews();
+  if ($('modal').hidden) showNextLifeEvent();
+}
+
+function applyPaused({ paused, isHost }) {
+  if (!isMulti()) return;
+  const changed = ui.pause.has('server') !== paused;
+  game.isHost = isHost;
+  setPaused('server', paused);
+  renderRating();
+  renderMonthTitle();
+  if (changed) toast(paused ? 'Организатор поставил игру на паузу' : 'Игра продолжается');
+}
+
+function finishMultiGame() {
+  closeLessonSilently();
+  $('modal').hidden = true;
+  onModalConfirm = null;
+  ui.eventQueue = [];
+  setPaused('server', false);
+  finishGame();
+  renderMonth();
+  closeConnection();
+  forgetRoom();
+}
+
+function showNextLifeEvent() {
+  const event = ui.eventQueue.shift();
+  if (event) showLifeEvent(event);
+}
+
+function renderRating() {
+  if (!isMulti()) return;
+  $('rating-value').textContent = `#${game.rank} / ${game.playersTotal}`;
+  const pause = $('host-pause');
+  pause.hidden = !game.isHost;
+  pause.textContent = ui.pause.has('server') ? 'Продолжить' : 'Пауза';
+}
+
+function applyActionResult({ portfolio, history }) {
+  game.portfolio = portfolio;
+  game.history.push(...history);
+}
+
+async function tradeMulti(slot, action, amount) {
+  const isBuy = action === 'buy';
+  const result = await net.request({ type: 'action', kind: action, ticker: game.tickers[slot.role], amount });
+  if (!isMulti()) return;
+  if (!result.ok) {
+    toast(result.error, 'error');
+    return;
+  }
+  applyActionResult(result);
+  toast(`${isBuy ? 'Куплено' : 'Продано'}: ${instrumentName(slot)},${formatUnits(result.amount, slot.unit)}`, 'success');
+  refresh();
+}
+
+async function submitMultiSavings(mode, amount) {
+  const result = await net.request({ type: 'action', kind: mode === 'deposit' ? 'deposit' : 'withdraw', amount });
+  if (!isMulti()) return;
+  if (!result.ok) {
+    toast(result.error, 'error');
+    return;
+  }
+  applyActionResult(result);
+  toast(`${mode === 'deposit' ? 'Счёт пополнен' : 'Со счёта снято'}: ${money(result.amount)}`, 'success');
+  closeSavingsForm();
+}
+
+// ===== Лобби =====
+// Экран рисуется целиком из объекта lobby, который присылает сервер
+
+function renderMultiPage(isConnecting = false) {
+  const input = $('room-input');
+  $('join-room').disabled = isConnecting || input.value.trim().length !== ROOM_CODE_LENGTH;
+}
+
+function leaveRoom() {
+  leaveMultiplayer();
+  setConnecting(false);
+  showEntry('multi');
+}
+
+async function copyText(text, message) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(message, 'success');
+  } catch (error) {
+    console.warn('Не удалось скопировать:', error);
+    toast('Не удалось скопировать', 'error');
+  }
+}
+
+function lobbyPlayerRow({ name, ready, isHost, isSelf }) {
+  const row = el('div', 'lobby__player');
+  if (isSelf) row.append(el('span', 'lobby__self'));
+  row.append(el('span', 'lobby__name', name));
+  if (isHost) row.append(el('span', 't-caption lobby__role', 'Организатор'));
+  row.append(el('span', `t-label lobby__status${ready ? ' is-ready' : ''}`, ready ? 'Готов' : 'Не готов'));
+  return row;
+}
+
+// Участники заполняют три колонки сверху вниз, свой игрок — первым
+function renderLobbyPlayers(players) {
+  const box = $('lobby-players');
+  box.innerHTML = '';
+  const members = players.filter((p) => !p.isHost).sort((a, b) => b.isSelf - a.isSelf);
+  if (!members.length) return;
+
+  const columns = 3;
+  let start = 0;
+  for (let i = 0; i < columns; i++) {
+    const size = Math.ceil((members.length - start) / (columns - i));
+    const column = el('div', 'lobby__column');
+    column.append(...members.slice(start, start + size).map(lobbyPlayerRow));
+    start += size;
+    if (i > 0) box.append(el('span', 'vsep'));
+    box.append(column);
+  }
+}
+
+function renderLobby() {
+  const { code, template, players } = lobby;
+  const self = players.find((p) => p.isSelf);
+  const host = players.find((p) => p.isHost);
+  const readyCount = players.filter((p) => p.ready).length;
+  const allReady = readyCount === players.length;
+  const { facts } = TEMPLATES[template];
+
+  $('lobby-code').textContent = code;
+  $('lobby-count').textContent = `${players.length} из ${LOBBY_MAX_PLAYERS}`;
+  $('lobby-host').replaceChildren(lobbyPlayerRow(host));
+  renderLobbyPlayers(players);
+
+  $('lobby-templates').hidden = !self.isHost;
+  for (const button of $('lobby-templates').children) {
+    button.classList.toggle('is-selected', button.dataset.template === template);
+  }
+  $('lobby-template').textContent = facts.title;
+  $('lobby-day').textContent = facts.day;
+  $('lobby-categories').textContent = facts.categories;
+  $('lobby-events').textContent = facts.events;
+
+  $('lobby-ready-count').textContent = `Готовы ${readyCount} из ${players.length}`;
+  const ready = $('lobby-ready');
+  ready.textContent = `Готов · ${readyCount}/${players.length}`;
+  ready.className = `t-label ${self.ready ? 'btn-back' : 'btn-primary'}`;
+  $('lobby-start').hidden = !self.isHost;
+  $('lobby-start').disabled = !allReady;
+}
+
+function bindLobby() {
+  $('create-room').addEventListener('click', createRoom);
+  $('join-room').addEventListener('click', joinRoom);
+  $('room-input').addEventListener('input', () => renderMultiPage());
+  $('room-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') joinRoom();
+  });
+  $('lobby-leave').addEventListener('click', leaveRoom);
+  $('lobby-copy-code').addEventListener('click', () => void copyText(lobby.code, 'Код комнаты скопирован'));
+  $('lobby-copy-link').addEventListener('click', () => {
+    void copyText(`${location.origin}${location.pathname}?room=${lobby.code}`, 'Ссылка скопирована');
+  });
+  $('lobby-templates').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-template]');
+    if (button) net?.send({ type: 'template', template: button.dataset.template });
+  });
+  $('lobby-ready').addEventListener('click', () => {
+    net?.send({ type: 'ready', ready: !lobby.players.find((p) => p.isSelf).ready });
+  });
+  $('lobby-start').addEventListener('click', () => net?.send({ type: 'start' }));
+  $('host-pause').addEventListener('click', () => {
+    net?.send({ type: 'pause', paused: !ui.pause.has('server') });
+  });
+}
+
 function bindEntry() {
   for (const node of document.querySelectorAll('[data-go]')) {
     node.addEventListener('click', () => showEntry(node.dataset.go));
@@ -1240,7 +1616,7 @@ function bindEntry() {
     } catch (error) {
       console.warn('Не удалось сохранить имя игрока:', error);
     }
-    showEntry('mode');
+    showEntry(room.inviteCode ? 'multi' : 'mode');
   });
 
   $('templates').addEventListener('click', (event) => {
@@ -1251,6 +1627,7 @@ function bindEntry() {
   });
 
   $('start-game').addEventListener('click', () => void startNewGame());
+  bindLobby();
 }
 
 function closeLessonSilently() {
@@ -1285,9 +1662,28 @@ function bindStaticControls() {
   document.addEventListener('visibilitychange', () => setPaused('hidden', document.hidden));
 }
 
-// Сохранённая партия продолжается сразу, иначе — вступительные экраны
+// Ссылка-приглашение: код уже подставлен, остаётся нажать «Присоединиться»
+function readInvite() {
+  const code = new URLSearchParams(location.search).get('room')?.trim().toUpperCase();
+  if (code?.length !== ROOM_CODE_LENGTH) return;
+  room.inviteCode = code;
+  $('room-input').value = code;
+}
+
+// Сначала — комната мультиплеера, затем приглашение и сохранённая партия, иначе — вступительные экраны
 async function init() {
   bindStaticControls();
+  readInvite();
+  const saved = savedRoom();
+  if (saved && (!room.inviteCode || saved.code === room.inviteCode)) {
+    if (await resumeRoom(saved)) return;
+    room.code = null;
+  }
+  if (room.inviteCode) {
+    showEntry(playerName() ? 'multi' : 'start');
+    return;
+  }
+
   let loaded = false;
   try {
     loaded = await loadGame();
@@ -1352,21 +1748,32 @@ function cardStates() {
   return { ...game.cards };
 }
 
+// В мультиплеере игрой управляет сервер: команды, меняющие ход партии, недоступны
+function soloOnly(command) {
+  return (...args) => {
+    if (isMulti()) {
+      console.warn('В мультиплеере эта команда недоступна');
+      return undefined;
+    }
+    return command(...args);
+  };
+}
+
 Object.assign(window, {
-  setCardState,
+  setCardState: soloOnly(setCardState),
   cardStates,
   game: {
     data: () => game,
     engine,
     prices: () => prices,
-    pause: () => setPaused('console', true),
-    resume: () => setPaused('console', false),
-    nextDay: () => {
+    pause: soloOnly(() => setPaused('console', true)),
+    resume: soloOnly(() => setPaused('console', false)),
+    nextDay: soloOnly(() => {
       const paused = new Set(ui.pause);
       ui.pause.clear();
       return advanceDay().finally(() => paused.forEach((reason) => ui.pause.add(reason)));
-    },
-    finish: finishNow,
+    }),
+    finish: soloOnly(finishNow),
     restart
   }
 });

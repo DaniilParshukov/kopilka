@@ -1,5 +1,5 @@
 // Новостная сводка из prices/news.csv.
-// Реальные названия компаний скрываются псевдонимами карточек («Акция 1»): игрок узнаёт,
+// Реальные названия компаний скрываются псевдонимами карточек («Касса»): игрок узнаёт,
 // во что вкладывался, только в итогах. Новости о компаниях, которых нет в партии, не показываются.
 
 const NEWS_URL = 'prices/news.csv';
@@ -69,7 +69,7 @@ async function loadAllNews() {
 /**
  * Новости игрового года с псевдонимами вместо названий компаний партии.
  * @param {number} year - год начала партии
- * @param {Object.<string, string>} aliases - тикер → псевдоним карточки, например { SBER: 'Акция 2' }
+ * @param {Object.<string, string>} aliases - тикер → псевдоним карточки, например { SBER: 'Касса' }
  * @returns {Promise<Array<{date: string, title: string, text: string}>>} по возрастанию даты
  */
 export async function loadNews(year, aliases) {
