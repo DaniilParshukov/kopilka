@@ -35,6 +35,12 @@ TECHNICAL_DEFAULT = 'F4B183'
 DEFAULT = 'FFC7CE'
 PLAIN_FILLS = {None, 'E2F0D9', 'FFF2CC'}
 
+# Погашение внутри окна, которого в выгрузке не видно: цена идёт дальше, как будто бумага осталась.
+# В этот день выплата получает статус 1 (бумага уходит из портфеля), а цена с этого дня равна 0.
+REDEMPTIONS = {
+    ('2022-08-01_2023-08-31', 'RU000A103WX4'): '2023-05-26',  # Гарант-Инвест-002P-04
+}
+
 # Столбец цены по названию группы. В MCFTR только close: open за 2020–2021 местами равен 0
 PRICE_COLUMN = {
     'Акции': 'close',
@@ -184,6 +190,20 @@ def collect():
     return data
 
 
+def apply_redemptions(data):
+    for (range_name, ticker), day in REDEMPTIONS.items():
+        item = data.get(range_name, {}).get(ticker)
+        where = f'{range_name[:4]} {ticker}'
+        payout = next((p for p in item['date_value'] if p['date'] == day), None) if item else None
+        if not payout or payout['status'] != 0:
+            fail(where, f'погашение {day}: в этот день нет обычной выплаты')
+            continue
+        payout['status'] = 1
+        start = dt.date.fromisoformat(range_name.split('_')[0])
+        offset = (dt.date.fromisoformat(day) - start).days
+        item['price'][offset:] = [0.0] * (len(item['price']) - offset)
+
+
 def compare_with_tickers(data):
     """tickers.csv должен совпадать с файлами. Для акций файла может не быть: игра их пропускает."""
     with open(TICKERS, encoding='utf-8', newline='') as source:
@@ -228,6 +248,7 @@ def write(data):
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
     collected = collect()
+    apply_redemptions(collected)
     data = {name: dict(sorted(collected[name].items())) for name in sorted(collected)}
     warnings = compare_with_tickers(data)
 

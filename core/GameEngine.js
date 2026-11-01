@@ -277,6 +277,9 @@ export class GameEngine {
 
             if (val[1] === 0) {
                 this.notify(`${name} выплачивает ${Math.round(amount)} ₽`, 'success');
+            } else if (val[1] === 1) {
+                this.notify(`${name} погашена, выплачено ${Math.round(amount)} ₽`, 'success');
+                delete portfolio.assets[ticker];
             }
             gameData.history.push({
                 type: 'ASSET_PAYOUT',
