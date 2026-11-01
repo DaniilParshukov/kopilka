@@ -6,14 +6,14 @@ export const MONTHS_TOTAL = 12;
 export const LOBBY_MAX_PLAYERS = 30;
 export const ROOM_CODE_LENGTH = 6;
 
-// Шаблоны игры (экран «Выбери шаблон игры» и лобби); facts — подписи для лобби
+// Шаблоны игры (экран «Выбери шаблон игры» и лобби); intro — показывать ли вводное обучение; facts — подписи для лобби
 export const TEMPLATES = {
   training: {
-    dayMs: 4000, openAll: false, lifeEvents: 'normal',
+    dayMs: 4000, openAll: false, lifeEvents: 'normal', intro: true,
     facts: { title: 'Учебная', day: '4 секунды', categories: 'Постепенно, по игровым месяцам', events: 'Обычная частота' }
   },
   advanced: {
-    dayMs: 3000, openAll: true, lifeEvents: 'high',
+    dayMs: 3000, openAll: true, lifeEvents: 'high', intro: false,
     facts: { title: 'Продвинутая', day: '3 секунды', categories: 'Все открыты с начала', events: 'Повышенная частота' }
   }
 };
@@ -93,6 +93,43 @@ export function initialCards(template) {
 
 export function newPortfolio() {
   return { cash: START_CASH, bankBalance: 0, assets: {}, assetValues: {} };
+}
+
+// Итог партии игрока. rows — в порядке легенды: стоимость на конец игры и денежный результат за весь период
+// (group — индекс цвета в полосе структуры активов)
+export function playerReport(portfolio, history, tickers) {
+  const sum = (...types) => history.filter((h) => types.includes(h.type)).reduce((total, h) => total + (Number(h.amount) || 0), 0);
+  const rows = [{
+    role: 'savings',
+    title: 'Накопительный счёт',
+    short: 'Накопительный',
+    group: 0,
+    value: portfolio.bankBalance,
+    invested: sum('BANK_OPEN'),
+    result: portfolio.bankBalance - (sum('BANK_OPEN') - sum('BANK_WITHDRAW'))
+  }];
+
+  const groups = { bonds: 1, funds: 2, stocks: 3, currency: 4, gold: 5 };
+  for (const [key, group] of Object.entries(groups)) {
+    for (const slot of CATEGORIES[key].slots) {
+      const entry = portfolio.assetValues[tickers[slot.role]];
+      const name = slotName(tickers, slot);
+      rows.push({
+        role: slot.role,
+        title: slot.title || name,
+        short: slot.short || slot.title || name,
+        group,
+        value: entry?.value || 0,
+        invested: entry?.invested || 0,
+        result: entry ? entry.value + entry.withdrawn - entry.invested : 0
+      });
+    }
+  }
+
+  rows.push({ role: 'cash', title: 'Свободные деньги', group: 6, value: portfolio.cash, result: null });
+
+  const capital = rows.reduce((total, row) => total + row.value, 0);
+  return { capital, profit: capital - START_CASH - sum('SALARY', 'CASH_CHANGE'), rows };
 }
 
 export function parseTickerRows(text) {

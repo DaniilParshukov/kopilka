@@ -146,6 +146,7 @@
 
     .header .dimmable { transition: opacity .2s; }
     body.is-learning .header .dimmable { opacity: .4; }
+    body.is-intro .header .dimmable { opacity: .42; }
 
     /* ===== Основная область ===== */
     .main {
@@ -320,7 +321,6 @@
     .market { flex: none; display: flex; flex-direction: column; gap: .5rem; }
     .market__title { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem; }
     .chart.market__plot { flex: none; height: 8.125rem; }
-    .market__timeline { display: flex; justify-content: space-between; color: var(--muted); white-space: pre; }
 
     .news { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1rem; }
     .news__list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; scrollbar-width: none; }
@@ -525,6 +525,8 @@
     .entry__steps { align-self: stretch; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
     .entry__steps > div { display: flex; flex-direction: column; gap: .5rem; }
     .entry__steps h3 { white-space: pre; }
+    .entry__resume-actions { display: flex; gap: .75rem; }
+    .entry__resume-actions button { width: 14rem; }
 
     /* Кнопки Button (Primary / Secondary) размером 40px */
     .btn-primary {
@@ -643,9 +645,66 @@
     .lobby__buttons button { flex: 1; width: auto; }
     .lobby__buttons button[hidden] { display: none; }
 
+    /* ===== Вводное обучение ===== */
+    body.is-intro > .main { display: none; }
+    .intro { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1.5rem; padding: 2rem; }
+    .intro[hidden] { display: none; }
+    .intro__head { flex: none; display: flex; flex-direction: column; gap: .75rem; }
+    .intro__body { flex: 1; min-height: 0; display: flex; gap: 2rem; }
+    .intro__text { flex: none; width: 22.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+    .intro__text .report__rule { flex: none; margin: 0; }
+    .intro__stage {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 1.5rem;
+      overflow: hidden;
+      background: var(--bg);
+      border-radius: 2rem;
+      box-shadow: inset -1px -1px 1px rgba(255, 255, 255, .8), inset 3px 3px 2.6px #9AA392;
+    }
+    .intro__stage--news { flex: none; width: 17.375rem; justify-content: flex-start; align-items: stretch; padding: 2rem; }
+    .intro__stage--news .news__item { gap: .25rem; }
+    .intro__stage--news .news__item .t-label { font-size: .75rem; line-height: 1.25rem; }
+    .intro__stage--news .news__item p { padding-right: 0; font-size: .6875rem; line-height: 1rem; }
+    .intro__stage .life-event { animation: none; }
+    .intro__column { display: flex; flex-direction: column; align-items: flex-start; gap: 1.5rem; }
+    .intro__help { display: inline-grid; place-items: center; }
+    .category__title .intro__help { flex: none; }
+    .intro__rule { margin: 1rem 0; }
+    .intro__nav { flex: none; display: flex; gap: .75rem; }
+    .intro__nav button { height: 2.75rem; }
+    .intro__back { width: 8.5rem; }
+    .intro__skip { width: 13.5rem; }
+    .intro__next { width: 11.25rem; margin-left: auto; }
+    .intro__back:disabled { background: none; color: var(--disabled); }
+
+    .intro-dark { background: var(--dark); border-radius: 1rem; color: var(--surface); }
+    .intro-month { width: 47.5rem; padding: 2rem 4.375rem; }
+    .intro-month .month { zoom: 2; }
+    .intro-capital { width: 50rem; display: flex; align-items: center; gap: 6.5rem; padding: 3rem 2rem; }
+    .intro-capital .capital { width: 13.25rem; }
+    .intro-capital .switch { width: 100%; }
+    .intro-savings { align-self: center; width: 15.875rem; height: 16.625rem; }
+    .intro-funds { width: 32.375rem; height: 16.625rem; }
+    .intro-stocks { zoom: .8; width: 64.875rem; height: 16.25rem; }
+    .intro-lesson { width: 51.5rem; height: 31.25rem; }
+    .intro-lesson .learn { zoom: .62; height: 50.4rem; animation: none; }
+    .intro-hint { align-self: stretch; display: flex; align-items: center; gap: 1rem; }
+    .intro-results { flex: 1; min-width: 0; zoom: .6; display: flex; flex-direction: column; justify-content: center; gap: 2rem; overflow: hidden; }
+    .intro-results .leaderboard { padding: 0 1.5rem; }
+
+    .intro--waiting { justify-content: center; padding: 6rem 7.5rem; }
+    .intro__progress { flex: none; height: .75rem; overflow: hidden; background: var(--dark-2); border-radius: .5rem; }
+    .intro__progress span { display: block; height: 100%; background: var(--accent); border-radius: .5rem; transition: width .2s ease-out; }
+
     /* ===== Итоги года ===== */
     body.is-final > .header,
     body.is-final > .main,
+    body.is-final > .intro,
     body.is-final > .entry { display: none; }
     .final {
       display: none;
@@ -654,15 +713,57 @@
       overflow-y: auto;
       flex-direction: column;
       gap: 1.5rem;
-      padding: 2rem;
+      padding: 1rem 2rem 2rem;
+      /* Шапка 4,125rem + отступ + компактная сводка 5,25rem: цель прокрутки не должна уходить под них */
+      scroll-padding-top: 10.875rem;
       background: var(--bg);
     }
     body.is-final .final { display: flex; }
     .final > * { flex: none; }
 
-    .final__header { display: flex; align-items: center; gap: .5rem; height: 2.625rem; }
+    /* Шапка закреплена; компактная сводка вынесена из потока, поэтому её показ не сдвигает страницу */
+    .final__header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      margin: 0 -2rem;
+      padding: 1rem 2rem .5rem;
+      background: var(--bg);
+    }
     .final__status { flex: 1; display: flex; justify-content: flex-end; align-items: center; gap: .5rem; color: var(--muted); }
     .final__status::before { content: ''; width: .375rem; height: .375rem; border-radius: 50%; background: var(--up); }
+
+    .summary-compact {
+      position: absolute;
+      top: calc(100% + .75rem);
+      left: 2rem;
+      right: 2rem;
+      height: 5.25rem;
+      display: grid;
+      grid-template-columns: 540fr 430fr 278fr;
+      align-items: center;
+      gap: 2rem;
+      padding: 0 1.5rem;
+      background: var(--dark);
+      border-radius: 1rem;
+      color: var(--surface);
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-.25rem);
+      transition: opacity .18s ease-out, transform .18s ease-out, visibility .18s;
+    }
+    .summary-compact.is-visible { opacity: 1; visibility: visible; transform: none; }
+    /* Контент страницы не должен просвечивать в зазоре между шапкой и сводкой */
+    .summary-compact::before { content: ''; position: absolute; top: -.75rem; left: -2rem; right: -2rem; height: .75rem; background: var(--bg); }
+    .summary-compact > div { display: flex; flex-direction: column; }
+    .summary-compact > div[hidden] { display: none; }
+    .summary-compact .up { color: var(--accent); }
+    @media (prefers-reduced-motion: reduce) {
+      .summary-compact { transition: none; }
+    }
 
     .summary {
       display: flex;
@@ -703,11 +804,55 @@
     .results { display: flex; gap: 1rem; margin-top: .25rem; }
     .results > .vsep { margin: 0; }
     .results__column { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .results__column[hidden], .results > .vsep[hidden] { display: none; }
     .result { display: flex; align-items: center; height: 1.5rem; font-size: .875rem; }
     .result__name { width: 10rem; flex: none; }
     .result__track { flex: 1; display: flex; align-items: center; padding-right: 1.5rem; }
     .result__bar { height: .25rem; border-radius: .125rem; }
     .result__value { width: 7rem; flex: none; text-align: right; white-space: nowrap; }
+
+    /* Итоговый рейтинг (Leaderboard): раскрывается строка, отдельных страниц нет */
+    .leaderboard { display: flex; flex-direction: column; gap: 1rem; padding: 1.5rem; }
+    .leaderboard[hidden] { display: none; }
+    .leaderboard__heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1.5rem; }
+    .leaderboard__table { display: flex; flex-direction: column; }
+    .leader__grid { display: grid; grid-template-columns: 4rem minmax(0, 1fr) 18.75rem 21.25rem 3rem; align-items: center; gap: 1rem; }
+    .leader__columns { padding: 1rem 1.5rem; }
+    .leader__number { text-align: right; white-space: nowrap; }
+    .leader { border-bottom: 1px solid var(--rule); }
+    .leader.is-open {
+      overflow: hidden;
+      border-bottom: 0;
+      background: var(--bg);
+      border-radius: 1rem;
+      box-shadow: inset -1px -1px 1px rgba(255, 255, 255, .8), inset 3px 3px 2.6px #9AA392;
+    }
+    .leader__head { width: 100%; padding: 1rem 1.5rem; border-radius: .5rem; text-align: left; }
+    .leader__head:hover { background: var(--inset); }
+    .leader__player { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+    .leader__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .leader__chevron {
+      justify-self: center;
+      width: .5rem;
+      height: .5rem;
+      margin-top: -.25rem;
+      border-right: 1.5px solid var(--dark);
+      border-bottom: 1.5px solid var(--dark);
+      transform: rotate(45deg);
+    }
+    .leader.is-open .leader__chevron { margin-top: .25rem; transform: rotate(225deg); }
+    .leader__details { display: flex; flex-direction: column; gap: 1.5rem; padding: 1.5rem; border-top: 1px solid var(--rule); }
+    .leader__details[hidden] { display: none; }
+    .leader__details .report__rule { margin: 0; }
+    .leader__metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    .leader__metric { display: flex; flex-direction: column; gap: .25rem; }
+    .leader__analysis { display: flex; flex-direction: column; gap: .75rem; }
+    .composition--small { flex: none; height: 1.5rem; margin: 0; }
+    .leader__table { display: flex; flex-direction: column; }
+    .leader__table-row { display: grid; grid-template-columns: .75rem minmax(0, 1fr) 13.75rem 10rem 16rem; align-items: center; gap: 1rem; }
+    .leader__table-title { grid-column: 1 / 3; }
+    .leader__table-row--line { min-height: 1.75rem; border-bottom: 1px solid var(--rule); }
+    .leader__table-row--line:last-child { border-bottom: 0; }
 
     .history { display: flex; flex-direction: column; gap: 1rem; }
     .history__heading { display: flex; flex-direction: column; padding: 0 1.5rem; }
@@ -719,6 +864,8 @@
     .history-card__metric { flex: none; width: 9.5rem; display: flex; flex-direction: column; align-items: flex-end; gap: .25rem; text-align: right; }
     .history-card__metric .t-caption { color: var(--muted); }
     .history-card .chart { flex: none; height: 3.25rem; }
+    .history-card--wide { grid-column: 1 / -1; }
+    .history-card--wide .chart { height: 6.5rem; }
 
     .final__footer { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding-bottom: 1rem; }
   </style>
@@ -733,10 +880,6 @@
       <linearGradient id="grad-down" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#C65A4D" stop-opacity=".3"/>
         <stop offset="1" stop-color="#C65A4D" stop-opacity="0"/>
-      </linearGradient>
-      <linearGradient id="grad-market" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#397E62"/>
-        <stop offset="1" stop-color="#397E62" stop-opacity="0"/>
       </linearGradient>
       <linearGradient id="grad-neutral" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#252925" stop-opacity=".16"/>
@@ -755,6 +898,16 @@
     <div class="entry__rule"></div>
 
     <div class="entry__content">
+      <!-- Перезаход: есть сохранённая партия -->
+      <div class="entry__page" data-page="resume">
+        <h1 class="entry__title" id="resume-title"></h1>
+        <p class="entry__muted" id="resume-text"></p>
+        <div class="entry__resume-actions">
+          <button type="button" class="btn-primary t-label" id="resume-yes">Восстановить игру</button>
+          <button type="button" class="btn-back t-label" id="resume-no">Нет, начать заново</button>
+        </div>
+      </div>
+
       <!-- 01 · Start -->
       <div class="entry__page" data-page="start">
         <div class="entry__hero">
@@ -778,7 +931,7 @@
 
       <!-- 02 · Name -->
       <div class="entry__page" data-page="name">
-        <button type="button" class="btn-back t-label" data-go="start">← Назад</button>
+        <button type="button" class="btn-back t-label" id="name-back" data-go="start">← Назад</button>
         <h1 class="entry__title">Как тебя зовут?</h1>
         <p class="entry__muted">Имя будет отображаться в игре и в твоём прогрессе.</p>
         <form class="entry__form" id="name-form" autocomplete="off">
@@ -964,21 +1117,13 @@
       </article>
     </section>
 
-    <!-- Информационная панель: новости подключены, график «Общий рынок» пока статичный пример из макета -->
     <aside class="info">
-      <div class="market is-inactive">
+      <div class="market">
         <div class="market__title">
-          <span class="t-heading">Общий рынок</span>
-          <span class="m-metric up">+1,2%</span>
+          <span class="t-heading">Индекс мосбиржи</span>
+          <span class="m-metric" id="market-change"></span>
         </div>
-        <svg class="chart market__plot" viewBox="0 0 100 100" preserveAspectRatio="none">
-          <polygon fill="url(#grad-market)" points="0,100 0,87 7,75 14,80 21,62 29,57 36,65 43,45 50,53 57,33 64,38 71,18 79,26 86,4 93,9 100,0 100,100"/>
-          <polyline fill="none" stroke="#397E62" stroke-width="2" vector-effect="non-scaling-stroke" points="0,87 7,75 14,80 21,62 29,57 36,65 43,45 50,53 57,33 64,38 71,18 79,26 86,4 93,9 100,0"/>
-        </svg>
-        <div class="market__timeline m-caption">
-          <span>Месяц 1</span>
-          <span>7 / 12</span>
-        </div>
+        <svg class="chart market__plot" id="market-chart"></svg>
       </div>
 
       <div class="news">
@@ -988,12 +1133,30 @@
     </aside>
   </main>
 
-  <!-- ===== Итоги года (Final / Singleplayer) ===== -->
+  <!-- Вводное обучение: шаги и экран ожидания рисует script.js -->
+  <section class="intro raised" id="intro" hidden></section>
+
+  <!-- ===== Итоги года (Final) ===== -->
   <section class="final" id="final">
-    <header class="final__header">
+    <header class="final__header" id="final-header">
       <span class="logo-dark" aria-hidden="true"></span>
       <span class="t-heading">КОПИЛКА</span>
       <span class="final__status t-label">Игра завершена</span>
+
+      <div class="summary-compact" id="final-compact">
+        <div>
+          <span class="t-caption">Итоговый портфель</span>
+          <span class="m-metric" id="final-compact-capital"></span>
+        </div>
+        <div>
+          <span class="t-caption">Заработано на инвестициях</span>
+          <span class="m-metric" id="final-compact-profit"></span>
+        </div>
+        <div id="final-compact-rank">
+          <span class="t-caption">Место в рейтинге</span>
+          <span class="m-metric summary__accent" id="final-compact-place"></span>
+        </div>
+      </div>
     </header>
 
     <div>
@@ -1001,7 +1164,7 @@
       <p class="entry__muted">12 месяцев финансовых решений</p>
     </div>
 
-    <div class="summary">
+    <div class="summary" id="final-summary">
       <div class="summary__primary">
         <div class="summary__item">
           <span>Итоговый портфель</span>
@@ -1028,9 +1191,9 @@
           <span class="summary__small">Жизненные ситуации</span>
           <span class="m-metric" id="final-events"></span>
         </div>
-        <div class="summary__item summary__item--small summary__note">
-          <span class="t-label">12 месяцев финансовых решений</span>
-          <span class="summary__small summary__faded">Выплаты и жизненные события учтены отдельно от результата инвестиций.</span>
+        <div class="summary__item summary__item--small" title="Если бы все зарплаты и жизненные события в день поступления шли в индекс Московской биржи полной доходности">
+          <span class="summary__small">Доходность рынка: индекс Московской биржи</span>
+          <span class="m-metric" id="final-market"></span>
         </div>
       </div>
     </div>
@@ -1051,6 +1214,25 @@
         <div class="results__column" id="final-gains-pct"></div>
         <span class="vsep"></span>
         <div class="results__column" id="final-losses-pct"></div>
+      </div>
+    </div>
+
+    <!-- Рейтинг только в мультиплеере -->
+    <div class="leaderboard raised" id="final-leaderboard" hidden>
+      <div class="leaderboard__heading">
+        <h2 class="t-heading">Итоговый рейтинг</h2>
+        <span class="m-caption entry__muted" id="final-leaderboard-count"></span>
+      </div>
+      <p class="summary__small entry__muted">По итоговому капиталу · Нажми на строку, чтобы изучить результат участника</p>
+      <div class="leaderboard__table">
+        <div class="leader__grid leader__columns t-caption entry__muted">
+          <span>Место</span>
+          <span>Игрок</span>
+          <span class="leader__number">Итоговый капитал</span>
+          <span class="leader__number">Заработано на инвестициях</span>
+          <span></span>
+        </div>
+        <div id="final-leaderboard-rows"></div>
       </div>
     </div>
 

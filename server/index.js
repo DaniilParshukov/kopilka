@@ -7,10 +7,11 @@ const PORT = Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || '127.0.0.1';
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 const DAY_MS = Number(process.env.DAY_MS) || undefined;   // только для проверки: ускоренные игровые дни
+const INTRO_MS = Number(process.env.INTRO_MS) || undefined; // только для проверки: сколько ждать вводное обучение
 const MAX_MESSAGES_PER_SECOND = 30;
 const HEARTBEAT_MS = 30 * 1000;
 
-const manager = new RoomManager(new Catalog(), { dayMs: DAY_MS });
+const manager = new RoomManager(new Catalog(), { dayMs: DAY_MS, introMs: INTRO_MS });
 
 const http = createServer((request, response) => {
   response.writeHead(request.url === '/health' ? 200 : 404, { 'Content-Type': 'text/plain; charset=utf-8' });

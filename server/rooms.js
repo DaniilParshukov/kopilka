@@ -6,7 +6,7 @@ import { LocalPrices } from '../prices/LocalPrices.js';
 import {
   CATEGORIES, LOBBY_MAX_PLAYERS, MONTHS_TOTAL, ROOM_CODE_LENGTH, TEMPLATES,
   categoryIsOpen, categoryOfTicker, initialCards, monthIndex, newPortfolio,
-  parseTickerRows, pickTickers, tickerDisplayName
+  parseTickerRows, pickTickers, playerReport, tickerDisplayName
 } from '../core/setup.js';
 
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // без похожих 0/O и 1/I
@@ -14,6 +14,7 @@ const NAME_MAX_LENGTH = 20;
 const DISCONNECT_GRACE_MS = 30 * 1000;  // столько ждём вернувшегося игрока, прежде чем убрать его из лобби
 const ROOM_IDLE_MS = 15 * 60 * 1000;    // комната без подключённых игроков удаляется
 const ROOM_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+const INTRO_MAX_MS = 5 * 60 * 1000;     // дольше вводного обучения не ждём: один игрок не должен держать всю комнату
 const MAX_ROOMS = 500;
 
 // Цены и тикеры всех игровых лет: читаются один раз при запуске
@@ -52,10 +53,11 @@ function isValidToken(token) {
 }
 
 class Room {
-  constructor(code, catalog, { dayMs, onEmpty }) {
+  constructor(code, catalog, { dayMs, introMs, onEmpty }) {
     this.code = code;
     this.catalog = catalog;
     this.dayMsOverride = dayMs;
+    this.introMs = introMs || INTRO_MAX_MS;
     this.onEmpty = onEmpty;
     this.createdAt = Date.now();
     this.idleSince = Date.now();
@@ -65,6 +67,8 @@ class Room {
     this.hostId = null;
     this.nextPlayerId = 1;
     this.paused = false;
+    this.clockStarted = false;  // дни идут, только когда все закончили вводное обучение
+    this.introTimer = null;
     this.timer = null;
     this.notices = [];
   }
@@ -109,8 +113,12 @@ class Room {
     player.graceTimer = setTimeout(() => {
       player.graceTimer = null;
       if (player.conn) return;
-      if (this.phase === 'lobby') this.removePlayer(player);
-      else if (player.id === this.hostId) this.passHost();
+      if (this.phase === 'lobby') {
+        this.removePlayer(player);
+        return;
+      }
+      if (player.id === this.hostId) this.passHost();
+      this.finishIntro(player);
     }, DISCONNECT_GRACE_MS);
   }
 
@@ -141,6 +149,7 @@ class Room {
     }
     // Из партии игрок не исчезает: его результат остаётся в рейтинге
     this.disconnect(player);
+    this.finishIntro(player);
   }
 
   // ===== Рассылка =====
@@ -168,6 +177,22 @@ class Room {
     for (const player of this.players.values()) {
       this.send(player, { type: 'paused', paused: this.paused, isHost: player.id === this.hostId });
     }
+  }
+
+  introStatus() {
+    const players = [...this.players.values()];
+    return { ready: players.filter((p) => p.introDone).length, total: players.length, started: this.clockStarted };
+  }
+
+  broadcastIntro() {
+    for (const player of this.players.values()) this.send(player, { type: 'intro', ...this.introStatus() });
+  }
+
+  // Итоговый рейтинг: портфели участников открываются только после конца партии
+  leaderboard() {
+    return [...this.players.values()]
+      .sort((a, b) => a.rank - b.rank)
+      .map((p) => ({ id: p.id, name: p.name, rank: p.rank, ...playerReport(p.data.portfolio, p.data.history, this.tickers) }));
   }
 
   newHistory(player) {
@@ -199,7 +224,10 @@ class Room {
       finished: this.phase === 'finished',
       rank: player.rank,
       playersTotal: this.players.size,
-      isHost: player.id === this.hostId
+      isHost: player.id === this.hostId,
+      intro: { ...this.introStatus(), done: player.introDone },
+      selfId: player.id,
+      leaderboard: this.phase === 'finished' ? this.leaderboard() : null
     });
   }
 
@@ -227,6 +255,7 @@ class Room {
     const plan = this.engine.planLifeEvents({ year: this.year, lifeEvents: template.lifeEvents, date });
     for (const player of this.players.values()) {
       player.cards = initialCards(template);
+      player.introDone = !template.intro;
       player.historySent = 0;
       player.data = {
         year: this.year,
@@ -241,8 +270,26 @@ class Room {
     }
 
     this.phase = 'playing';
+    this.clockStarted = !template.intro;
     this.updateRanks();
     for (const player of this.players.values()) this.sendSnapshot(player);
+    if (template.intro) this.introTimer = setTimeout(() => this.startClock(), this.introMs);
+    else this.scheduleDay(this.dayMs);
+  }
+
+  // Игрок закончил вводное обучение; вышедший или потерявший связь считается закончившим, чтобы не держать остальных
+  finishIntro(player) {
+    if (this.phase !== 'playing' || this.clockStarted || player.introDone) return;
+    player.introDone = true;
+    if ([...this.players.values()].every((p) => p.introDone)) this.startClock();
+    else this.broadcastIntro();
+  }
+
+  startClock() {
+    if (this.clockStarted) return;
+    clearTimeout(this.introTimer);
+    this.clockStarted = true;
+    this.broadcastIntro();
     this.scheduleDay(this.dayMs);
   }
 
@@ -261,7 +308,7 @@ class Room {
   }
 
   setPaused(paused) {
-    if (this.phase !== 'playing' || this.paused === paused) return;
+    if (this.phase !== 'playing' || !this.clockStarted || this.paused === paused) return;
     this.paused = paused;
     if (paused) {
       clearTimeout(this.timer);
@@ -300,6 +347,7 @@ class Room {
     const finished = monthIndex(first.data.date, this.year) >= MONTHS_TOTAL;
     if (finished) this.phase = 'finished';
     this.updateRanks();
+    const leaderboard = finished ? this.leaderboard() : null;
 
     for (const [player, update] of updates) {
       this.send(player, {
@@ -310,7 +358,9 @@ class Room {
         ...update,
         rank: player.rank,
         playersTotal: this.players.size,
-        finished
+        finished,
+        selfId: player.id,
+        leaderboard
       });
     }
     if (!finished) this.scheduleDay(this.dayMs);
@@ -383,6 +433,9 @@ class Room {
         }
         this.start();
         return null;
+      case 'intro-done':
+        this.finishIntro(player);
+        return null;
       case 'pause':
         if (isHost) this.setPaused(Boolean(message.paused));
         return null;
@@ -399,7 +452,7 @@ class Room {
 
   handleAction(player, message) {
     const reply = { type: 'result', id: message.id, kind: message.kind };
-    if (this.phase !== 'playing') {
+    if (this.phase !== 'playing' || !this.clockStarted) {
       this.send(player, { ...reply, ok: false, error: 'Партия не идёт' });
       return;
     }
@@ -413,6 +466,7 @@ class Room {
 
   destroy() {
     clearTimeout(this.timer);
+    clearTimeout(this.introTimer);
     for (const player of this.players.values()) {
       clearTimeout(player.graceTimer);
       if (player.conn) {
@@ -425,9 +479,10 @@ class Room {
 }
 
 export class RoomManager {
-  constructor(catalog, { dayMs } = {}) {
+  constructor(catalog, { dayMs, introMs } = {}) {
     this.catalog = catalog;
     this.dayMs = dayMs;
+    this.introMs = introMs;
     this.rooms = new Map();
     this.sweepTimer = setInterval(() => this.sweep(), 60 * 1000);
     this.sweepTimer.unref();
@@ -460,7 +515,7 @@ export class RoomManager {
   create(conn, { name, token }) {
     if (!isValidToken(token)) return this.fail(conn, 'Некорректный запрос');
     if (this.rooms.size >= MAX_ROOMS) return this.fail(conn, 'Сервер перегружен, попробуй позже');
-    const room = new Room(this.createCode(), this.catalog, { dayMs: this.dayMs, onEmpty: (r) => this.deleteRoom(r) });
+    const room = new Room(this.createCode(), this.catalog, { dayMs: this.dayMs, introMs: this.introMs, onEmpty: (r) => this.deleteRoom(r) });
     this.rooms.set(room.code, room);
     room.attach(room.addPlayer(token, name), conn);
     room.broadcastLobby();

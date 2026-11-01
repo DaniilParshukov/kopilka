@@ -2,12 +2,13 @@ import { GameEngine } from './core/GameEngine.js';
 import { LocalStorageAdapter } from './core/LocalStorageAdapter.js';
 import { LocalPrices } from './prices/LocalPrices.js';
 import { lessons, lessonTabs, riskNames } from './lessons.js';
+import { introSteps } from './intro.js';
 import { loadNews } from './news.js';
 import { MultiplayerClient, multiplayerUrl } from './multiplayer.js';
 import {
   CATEGORIES, LOBBY_MAX_PLAYERS, MONTHS_TOTAL, ROOM_CODE_LENGTH, START_CASH, TEMPLATES,
   categoryIsOpen, initialCards, monthIndex as gameMonthIndex, newPortfolio, parseTickerRows,
-  pickTickers, slotName, tickerDisplayName
+  pickTickers, playerReport, slotName, tickerDisplayName
 } from './core/setup.js';
 
 // ===== Настройки =====
@@ -16,7 +17,9 @@ const GAME_ID = 'player';       // одно сохранение на брауз
 const PLAYER_KEY = 'copilka-player-name';
 const ROOM_KEY = 'copilka-room';  // { code, token } текущей комнаты мультиплеера
 const SALARY_DAYS = [[10, 'Аванс'], [25, 'Зарплата']];
+const MONTH_NAMES = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const CHART_DAYS = 30;          // окно мини-графиков и изменения цены
+const MARKET_INDEX = 'MCFTR';   // индекс Мосбиржи полной доходности: только для сравнения, в tickers.csv его нет
 const QUANTITIES = ['1', '25', '50', 'MAX'];
 const CARD_STATES = ['active', 'locked', 'unlock'];
 // В мультиплеере время идёт у всех одинаково: эти причины его не останавливают
@@ -47,7 +50,9 @@ const ui = {
   qty: {},              // ticker -> '1' | '25' | '50' | 'MAX'
   savingsForm: null,    // null | 'deposit' | 'withdraw'
   lesson: null,         // { key, unlocking }
-  pause: new Set(),     // причины паузы: lesson, modal, hidden, console, finished
+  pause: new Set(),     // причины паузы: lesson, modal, hidden, console, finished, intro
+  intro: null,          // { step, waiting } — идёт вводное обучение
+  introStatus: null,    // мультиплеер: { ready, total } — сколько игроков его закончили
   updaters: [],         // обновление значений карточек без перестройки DOM
   news: [],             // новости игрового года (с псевдонимами), по возрастанию даты
   newsShown: 0,         // сколько новостей уже выведено в ленту
@@ -286,6 +291,7 @@ async function createGame(templateKey, player) {
     pendingEvent: null,
     ...pickTickers(byYear[year], prices),
     cards: initialCards(template),
+    introPending: template.intro,
     finished: false
   };
   updateCardAvailability();
@@ -295,8 +301,11 @@ async function createGame(templateKey, player) {
 async function loadGame() {
   const saved = await storage.loadGame(GAME_ID);
   if (!saved?.tickers || !saved.year || !saved.cards) return false;
+  prices = await LocalPrices.create(String(saved.year));
+  // Выпуск из сохранения мог быть заменён в новых данных: такую партию продолжить нельзя
+  const held = [...Object.values(saved.tickers), ...Object.keys(saved.portfolio?.assets || {})];
+  if (held.some((ticker) => !prices.getHistory(ticker).length)) return false;
   game = saved;
-  prices = await LocalPrices.create(String(game.year));
   engine.prices = prices;
   await addMissingStock();
   return true;
@@ -410,14 +419,13 @@ function renderHeader() {
 // запускается заново, а её окончание (animationend) двигает игру на следующий день.
 function renderMonth() {
   // После окончания игры дата уже 1 сентября следующего года — показываем заполненный последний месяц
-  const date = game.finished ? new Date(game.year + 1, 7, 31) : game.date;
-  const index = monthIndex(date);
+  const date = lastShownDate();
   const year = date.getFullYear();
   const month = date.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const today = game.finished ? daysInMonth + 1 : date.getDate();
 
-  renderMonthTitle(index);
+  renderMonthTitle();
 
   const days = $('month-days');
   days.innerHTML = '';
@@ -425,26 +433,42 @@ function renderMonth() {
     const state = d < today ? ' is-done' : d === today ? ' is-current' : '';
     days.append(el('span', `month__day${state}`));
   }
+  renderPaydays($('month-paydays'), daysInMonth);
+}
 
-  const paydays = $('month-paydays');
-  paydays.innerHTML = '';
+function lastShownDate() {
+  return game.finished ? new Date(game.year + 1, 7, 31) : game.date;
+}
+
+function renderPaydays(box, daysInMonth) {
+  box.innerHTML = '';
   for (const [day, label] of SALARY_DAYS) {
     const mark = el('span', 'payday', label);
     mark.style.left = `${((day - 0.5) / daysInMonth) * 100}%`;
-    paydays.append(mark);
+    box.append(mark);
   }
 }
 
-function renderMonthTitle(index = Math.min(monthIndex(), MONTHS_TOTAL - 1)) {
+function renderMonthTitle() {
+  const date = lastShownDate();
   const status = ui.pause.has('connection') ? ' · нет связи' : ui.pause.has('server') ? ' · пауза' : '';
-  $('month-title').textContent = `Месяц ${index + 1} / ${MONTHS_TOTAL}${status}`;
+  $('month-title').textContent = `${date.getDate()} ${MONTH_NAMES[date.getMonth()]} (${monthIndex(date) + 1}/${MONTHS_TOTAL})${status}`;
 }
 
 // ===== Карточки =====
 
 function refresh() {
   renderHeader();
+  renderMarket();
   ui.updaters.forEach((update) => update());
+}
+
+// Индекс Мосбиржи: как у инструментов — окно графика CHART_DAYS, процент и цвет по изменению за день
+function renderMarket() {
+  const delta = dailyChange(MARKET_INDEX);
+  $('market-change').textContent = changePercent(delta);
+  $('market-change').className = `m-metric ${trendClass(delta)}`;
+  drawChart($('market-chart'), priceSeries(MARKET_INDEX), delta >= 0);
 }
 
 function renderField() {
@@ -790,6 +814,17 @@ function renderBlock(block) {
   return box;
 }
 
+function lessonColumns(lesson) {
+  const columns = el('div', 'learn__columns');
+  for (const side of ['left', 'right']) {
+    if (side === 'right') columns.append(el('span', 'vsep'));
+    const column = el('div', 'learn__column');
+    lesson[side].forEach((block) => column.append(renderBlock(block)));
+    columns.append(column);
+  }
+  return columns;
+}
+
 // unlocking — ключ категории, которая откроется после прохождения обучения
 function openLesson(key, unlocking = ui.lesson?.unlocking ?? null) {
   const lesson = lessons[key];
@@ -808,17 +843,10 @@ function openLesson(key, unlocking = ui.lesson?.unlocking ?? null) {
     tabs.append(button(tabKey === key ? 'is-active' : '', label, () => openLesson(tabKey)));
   }
 
-  const columns = el('div', 'learn__columns');
-  for (const side of ['left', 'right']) {
-    if (side === 'right') columns.append(el('span', 'vsep'));
-    const column = el('div', 'learn__column');
-    lesson[side].forEach((block) => column.append(renderBlock(block)));
-    columns.append(column);
-  }
   const body = $('learn-body');
   body.innerHTML = '';
   body.scrollTop = 0;
-  body.append(columns);
+  body.append(lessonColumns(lesson));
 
   $('learn').hidden = false;
   document.body.classList.add('is-learning');
@@ -900,6 +928,13 @@ function finishGame() {
   renderFinal();
   document.body.classList.add('is-final');
   $('final').scrollTop = 0;
+  updateCompactSummary();
+}
+
+// Компактная сводка показывается под шапкой, когда большая полностью ушла под неё
+function updateCompactSummary() {
+  const passed = $('final-summary').getBoundingClientRect().bottom <= $('final-header').getBoundingClientRect().bottom;
+  $('final-compact').classList.toggle('is-visible', passed);
 }
 
 // ===== Итоги года =====
@@ -907,37 +942,18 @@ function finishGame() {
 // Цвета групп в полосе «Структура активов»: счёт, облигации, ПИФы, акции, валюта, золото, свободные деньги
 const GROUP_COLORS = ['#252925', '#3A4238', '#8E9788', '#AEB8A8', '#DDE4D7', '#D9F477', '#EDF1E7'];
 
-// Строки отчёта в порядке легенды: стоимость на конец игры и денежный результат за весь период
-function finalRows() {
-  const { portfolio } = game;
-  const rows = [{
-    role: 'savings',
-    title: 'Накопительный счёт',
-    short: 'Накопительный',
-    group: 0,
-    value: portfolio.bankBalance,
-    invested: sumHistory('BANK_OPEN'),
-    result: portfolio.bankBalance - bankNetDeposits()
-  }];
+// Если бы все поступления (старт, зарплаты, жизненные события) в день получения шли в индекс:
+// его стоимость на конец игры и доходность относительно этих поступлений, как у «Заработано на инвестициях»
+function marketBenchmark() {
+  const indexPrice = (date) => Number(prices.getPrice(MARKET_INDEX, date)) || 0;
+  const inflows = game.history.filter((h) => h.type === 'SALARY' || h.type === 'CASH_CHANGE');
+  let units = START_CASH / indexPrice(new Date(game.year, 8, 1));
+  // У жизненных событий (CASH_CHANGE) дата лежит в поле day
+  for (const h of inflows) units += (Number(h.amount) || 0) / indexPrice(new Date(h.date ?? h.day));
 
-  const groups = { bonds: 1, funds: 2, stocks: 3, currency: 4, gold: 5 };
-  for (const [key, group] of Object.entries(groups)) {
-    for (const slot of CATEGORIES[key].slots) {
-      const entry = portfolio.assetValues[game.tickers[slot.role]];
-      rows.push({
-        role: slot.role,
-        title: slot.title || instrumentName(slot),
-        short: slot.short || slot.title || instrumentName(slot),
-        group,
-        value: entry?.value || 0,
-        invested: entry?.invested || 0,
-        result: entry ? entry.value + entry.withdrawn - entry.invested : 0
-      });
-    }
-  }
-
-  rows.push({ role: 'cash', title: 'Свободные деньги', group: 6, value: portfolio.cash, result: null });
-  return rows;
+  const value = units * indexPrice(game.date);
+  const invested = contributions();
+  return { value, change: invested > 0 ? ((value - invested) / invested) * 100 : 0 };
 }
 
 function renderFinal() {
@@ -952,18 +968,29 @@ function renderFinal() {
   $('final-events').textContent = money(events, true);
   $('final-events').className = `m-metric ${Math.round(events) < 0 ? 'down' : ''}`;
   $('final-rank').classList.toggle('is-hidden', !isMulti());
-  $('final-rank-place').textContent = isMulti() ? `#${game.rank}` : '—';
-  $('final-rank-total').textContent = isMulti() ? `из ${game.playersTotal}` : 'из —';
+  $('final-rank-place').textContent = isMulti() ? `${game.rank}-е место` : '—';
+  $('final-rank-total').textContent = isMulti() ? `из ${game.playersTotal} ${plural(game.playersTotal, ['участника', 'участников', 'участников'])}` : 'из —';
 
-  const rows = finalRows();
-  renderComposition(rows, total);
+  $('final-compact-capital').textContent = money(total);
+  $('final-compact-profit').textContent = money(profit, true);
+  $('final-compact-profit').className = `m-metric ${trendClass(Math.round(profit))}`;
+  $('final-compact-rank').hidden = !isMulti();
+  $('final-compact-place').textContent = isMulti() ? `${game.rank}-е из ${game.playersTotal}` : '';
+
+  const market = marketBenchmark();
+  $('final-market').textContent = `${money(market.value)} (${percent(market.change)})`;
+  const marketTrend = trendClass(Math.round(market.change * 10));
+  $('final-market').className = `m-metric ${marketTrend === 'up' ? 'summary__accent' : marketTrend === 'down' ? 'down' : ''}`;
+
+  const { rows } = playerReport(game.portfolio, game.history, game.tickers);
+  renderComposition($('final-composition'), rows, total);
   renderLegend(rows, total);
   renderResults(rows);
+  renderLeaderboard();
   renderHistory();
 }
 
-function renderComposition(rows, total) {
-  const box = $('final-composition');
+function renderComposition(box, rows, total) {
   box.innerHTML = '';
   const byGroup = GROUP_COLORS.map((_, group) => rows.filter((r) => r.group === group).reduce((s, r) => s + r.value, 0));
   byGroup.forEach((value, group) => {
@@ -1002,12 +1029,12 @@ function renderLegend(rows, total) {
 // Два рейтинга инструментов: в рублях и в % от вложенного
 function renderResults(rows) {
   const used = rows.filter((r) => r.result !== null && Math.round(r.result) !== 0);
-  renderResultColumns('final-gains', 'final-losses', used.map((r) => ({ ...r, score: r.result })), (v) => money(v, true));
+  renderResultColumns($('final-gains'), $('final-losses'), used.map((r) => ({ ...r, score: r.result })), (v) => money(v, true));
 
   const withPercent = used
     .map((r) => ({ ...r, score: r.invested > 0 ? (r.result / r.invested) * 100 : null }))
     .filter((r) => r.score !== null);
-  renderResultColumns('final-gains-pct', 'final-losses-pct', withPercent, (v) => percent(v));
+  renderResultColumns($('final-gains-pct'), $('final-losses-pct'), withPercent, (v) => percent(v));
 }
 
 // Прибыльные — по убыванию, убыточные — по убыванию модуля; ширина бара — доля от максимального модуля.
@@ -1019,10 +1046,9 @@ function resultScale(list) {
   return Math.max(Number.EPSILON, Math.min(values[values.length - 1], median * 3));
 }
 
-function renderResultColumns(gainsId, lossesId, list, format) {
+function renderResultColumns(gainsBox, lossesBox, list, format) {
   const scale = resultScale(list);
-  const fill = (id, items) => {
-    const box = $(id);
+  const fill = (box, items) => {
     box.innerHTML = '';
     for (const row of items) {
       const line = el('div', 'result');
@@ -1039,8 +1065,92 @@ function renderResultColumns(gainsId, lossesId, list, format) {
       box.append(line);
     }
   };
-  fill(gainsId, list.filter((r) => r.score > 0).sort((a, b) => b.score - a.score));
-  fill(lossesId, list.filter((r) => r.score < 0).sort((a, b) => a.score - b.score));
+  const losses = list.filter((r) => r.score < 0).sort((a, b) => a.score - b.score);
+  fill(gainsBox, list.filter((r) => r.score > 0).sort((a, b) => b.score - a.score));
+  fill(lossesBox, losses);
+  // Без убытков левая колонка занимает всю ширину
+  lossesBox.hidden = !losses.length;
+  lossesBox.previousElementSibling.hidden = !losses.length;
+}
+
+// ===== Итоговый рейтинг =====
+// Приходит с сервера в конце партии: те же строки отчёта для каждого участника
+
+function renderLeaderboard() {
+  const players = isMulti() ? game.leaderboard : null;
+  $('final-leaderboard').hidden = !players;
+  if (!players) return;
+  $('final-leaderboard-count').textContent = `${players.length} ${plural(players.length, ['участник', 'участника', 'участников'])}`;
+  $('final-leaderboard-rows').replaceChildren(...players.map((player) => leaderRow(player, player.id === game.selfId)));
+}
+
+function leaderRow(player, isSelf) {
+  const item = el('div', 'leader');
+  const identity = el('span', 'leader__player');
+  if (isSelf) identity.append(el('span', 'lobby__self'));
+  identity.append(el('span', 'leader__name', isSelf ? `${player.name} · Ты` : player.name));
+
+  let details = null;
+  const head = button('leader__head leader__grid', undefined, () => {
+    details ??= item.appendChild(leaderDetails(player));
+    const isOpen = item.classList.toggle('is-open');
+    details.hidden = !isOpen;
+    head.setAttribute('aria-expanded', String(isOpen));
+  });
+  head.setAttribute('aria-expanded', 'false');
+  head.append(
+    el('span', 'm-body', String(player.rank)),
+    identity,
+    el('span', 'm-body leader__number', money(player.capital)),
+    el('span', `m-body leader__number ${trendClass(Math.round(player.profit))}`, money(player.profit, true)),
+    el('span', 'leader__chevron')
+  );
+  item.append(head);
+  return item;
+}
+
+function leaderMetric(label, value, className = '') {
+  const box = el('div', 'leader__metric');
+  box.append(el('span', 'summary__small entry__muted', label), el('span', `m-metric ${className}`, value));
+  return box;
+}
+
+function leaderDetails({ capital, profit, rows }) {
+  const box = el('div', 'leader__details');
+  const metrics = el('div', 'leader__metrics');
+  metrics.append(
+    leaderMetric('Итоговый капитал', money(capital)),
+    leaderMetric('Заработано на инвестициях', money(profit, true), trendClass(Math.round(profit)))
+  );
+
+  const analysis = el('div', 'leader__analysis');
+  const composition = el('div', 'composition composition--small');
+  renderComposition(composition, rows, capital);
+
+  const table = el('div', 'leader__table');
+  const header = el('div', 'leader__table-row t-label entry__muted');
+  header.append(el('span', 'leader__table-title', 'Инструмент'), el('span', 'leader__number', 'В портфеле'), el('span', 'leader__number', 'Доля'), el('span', 'leader__number', 'Результат за игру'));
+  table.append(header);
+  for (const row of rows) {
+    const line = el('div', 'leader__table-row leader__table-row--line');
+    const marker = el('span', 'marker');
+    marker.style.background = GROUP_COLORS[row.group];
+    const result = row.result === null
+      ? el('span', 'm-body leader__number flat', '—')
+      : el('span', `m-body leader__number ${trendClass(Math.round(row.result))}`, money(row.result, true));
+    line.append(
+      marker,
+      el('span', 'summary__small', row.title),
+      el('span', `m-body leader__number ${Math.round(row.value) < 0 ? 'down' : ''}`, money(row.value)),
+      el('span', 'm-body leader__number flat', percent(capital > 0 ? (row.value / capital) * 100 : 0, false)),
+      result
+    );
+    table.append(line);
+  }
+
+  analysis.append(el('h3', 't-heading', 'Портфель и результаты'), composition, table);
+  box.append(metrics, el('div', 'report__rule'), analysis);
+  return box;
 }
 
 // Реальные инструменты партии: название, тикер, изменение за игровой год и график по неделям
@@ -1053,7 +1163,10 @@ function renderHistory() {
   const end = prices.getDay(new Date(game.year + 1, 7, 31));
   const weekly = (history) => history.slice(start, end + 1).filter((v, i, list) => v > 0 && (i % 7 === 0 || i === list.length - 1));
 
-  const cards = [{ role: 'bank', title: 'Накопительный счёт', ticker: game.tickers.bank, isRate: true }];
+  const cards = [
+    { title: 'Индекс Московской биржи', slotName: 'Полная доходность', ticker: MARKET_INDEX, wide: true },
+    { role: 'bank', title: 'Накопительный счёт', ticker: game.tickers.bank, isRate: true }
+  ];
   for (const key of ['bonds', 'funds', 'stocks', 'currency', 'gold']) {
     for (const slot of CATEGORIES[key].slots) {
       const ticker = game.tickers[slot.role];
@@ -1067,7 +1180,7 @@ function renderHistory() {
     const first = series[0] || 0;
     const last = series[series.length - 1] || 0;
 
-    const box = el('article', 'history-card raised');
+    const box = el('article', `history-card raised${card.wide ? ' history-card--wide' : ''}`);
     const head = el('div', 'history-card__head');
     const identity = el('div', 'history-card__identity');
     identity.append(
@@ -1099,6 +1212,324 @@ function renderHistory() {
   }
 }
 
+// ===== Вводное обучение =====
+// Шесть шагов перед первым днём партии: время стоит. В мультиплеере первый день наступает,
+// когда обучение закончили все (решает сервер); до этого закончившие видят экран ожидания.
+
+function openIntro() {
+  ui.intro ??= { step: 0, waiting: false };
+  document.body.classList.add('is-intro');
+  $('intro').hidden = false;
+  setPaused('intro', true);
+  renderIntro();
+  renderRating();
+}
+
+function closeIntro() {
+  if (!ui.intro) return;
+  ui.intro = null;
+  document.body.classList.remove('is-intro');
+  $('intro').hidden = true;
+  setPaused('intro', false);
+  renderRating();
+}
+
+function completeIntro() {
+  if (isMulti()) {
+    ui.intro.waiting = true;
+    renderIntro();
+    net?.send({ type: 'intro-done' });
+    return;
+  }
+  game.introPending = false;
+  closeIntro();
+  void save();
+}
+
+function introGo(delta) {
+  ui.intro.step += delta;
+  renderIntro();
+}
+
+function applyIntro({ ready, total, started, done }) {
+  if (!isMulti()) return;
+  if (started) {
+    closeIntro();
+    return;
+  }
+  ui.introStatus = { ready, total };
+  if (!ui.intro) openIntro();
+  if (done) ui.intro.waiting = true;
+  // Заявка могла потеряться при обрыве связи
+  if (done === false && ui.intro.waiting) net?.send({ type: 'intro-done' });
+  if (ui.intro.waiting) renderIntro();
+}
+
+function renderIntro() {
+  const box = $('intro');
+  box.classList.toggle('intro--waiting', ui.intro.waiting);
+  box.replaceChildren(...(ui.intro.waiting ? introWaiting() : introStep(ui.intro.step)));
+}
+
+function introWaiting() {
+  const { ready, total } = ui.introStatus || { ready: 0, total: 1 };
+  const bar = el('div', 'intro__progress');
+  const fill = el('span');
+  fill.style.width = `${total > 0 ? (ready / total) * 100 : 0}%`;
+  bar.append(fill);
+  return [
+    el('span', 't-label', 'ВВОДНОЕ ОБУЧЕНИЕ ЗАВЕРШЕНО'),
+    el('h1', 'entry__title', 'Ожидаем остальных игроков'),
+    el('p', '', 'Игра начнётся, когда все завершат обучение'),
+    el('span', 'm-value', `Готовы ${ready} из ${total}`),
+    el('p', '', `Ещё проходят обучение: ${total - ready}`),
+    bar
+  ];
+}
+
+function introStep(index) {
+  const step = introSteps[index];
+  const isLast = index === introSteps.length - 1;
+
+  const head = el('div', 'intro__head');
+  head.append(el('span', 't-label', `ВВОДНОЕ ОБУЧЕНИЕ · ${index + 1} / ${introSteps.length}`), el('h1', 'entry__title', step.title));
+
+  const text = el('div', 'intro__text');
+  text.append(el('p', 't-heading', step.lead), el('div', 'report__rule'), el('p', '', step.note));
+
+  const body = el('div', 'intro__body');
+  body.append(text, ...INTRO_DEMOS[step.demo](step));
+
+  const back = button('btn-back t-label intro__back', 'Назад', () => introGo(-1));
+  back.disabled = index === 0;
+  const nav = el('div', 'intro__nav');
+  nav.append(
+    back,
+    button('btn-back t-label intro__skip', 'Пропустить обучение', completeIntro),
+    button('btn-primary t-label intro__next', isLast ? 'Начать игру' : 'Далее', () => (isLast ? completeIntro() : introGo(1)))
+  );
+  return [head, body, nav];
+}
+
+// Примеры интерфейса только показываются: inert отключает их кнопки
+function introStage(extraClass = '') {
+  const stage = el('div', `intro__stage ${extraClass}`);
+  stage.inert = true;
+  return stage;
+}
+
+function demoCategory(title, ...content) {
+  const box = el('section', 'category raised');
+  const head = el('div', 'category__title t-label');
+  head.append(el('span', '', title), el('span', 'help m-control intro__help', '?'));
+  const body = el('div', 'category__body');
+  body.append(...content);
+  box.append(head, body);
+  return box;
+}
+
+function demoActions(leftLabel, rightLabel) {
+  const actions = el('div', 'actions');
+  actions.append(button('btn t-label', leftLabel), button('btn btn--dark t-label', rightLabel));
+  return actions;
+}
+
+function demoChart(series, up) {
+  const terms = el('div', 'terms');
+  const chart = chartElement();
+  drawChart(chart, series, up);
+  terms.append(chart);
+  return terms;
+}
+
+function demoInstrument({ name, price, change, trend, series, units, value }) {
+  const box = el('div', 'instrument');
+  const head = el('div');
+  const quote = el('div', 'quote');
+  quote.append(el('span', 'm-price', price), el('span', `m-control ${trend}`, change));
+  head.append(el('div', 't-label', name), quote);
+
+  const ownership = el('div', 'ownership');
+  const holdings = el('div');
+  holdings.append(el('span', 't-caption', 'У вас'), el('span', 'm-control', units));
+  const metric = el('div', 'metric');
+  const swap = el('span', 'metric-switch');
+  swap.innerHTML = '<img src="assets/swap.svg" alt="">';
+  metric.append(el('span', 'm-body', value), swap);
+  ownership.append(holdings, metric);
+
+  const trade = el('div', 'trade');
+  const qty = el('div', 'qty m-caption');
+  for (const amount of QUANTITIES) qty.append(button(amount === '25' ? 'is-active' : '', amount));
+  trade.append(qty, demoActions('Продать', 'Купить'));
+
+  box.append(head, demoChart(series, trend === 'up'), ownership, trade);
+  return box;
+}
+
+function withSeparators(items) {
+  return items.flatMap((item, i) => (i > 0 ? [el('span', 'vsep'), item] : [item]));
+}
+
+const INTRO_DEMOS = {
+  time({ caption }) {
+    const stage = introStage();
+    const card = el('div', 'intro-dark intro-month');
+    const month = el('div', 'month');
+    const days = el('div', 'month__days');
+    for (let d = 1; d <= 30; d++) days.append(el('span', `month__day${d === 1 ? ' is-done' : ''}`));
+    const paydays = el('div', 'month__paydays t-caption');
+    renderPaydays(paydays, 30);
+    month.append(el('span', 'm-control month__title', '1 сентября (1/12)'), days, paydays);
+    card.append(month);
+    const column = el('div', 'intro__column');
+    column.append(card, el('p', 't-heading', caption));
+    stage.append(column);
+    return [stage];
+  },
+
+  capital({ caption }) {
+    const stage = introStage();
+    const card = el('div', 'intro-dark intro-capital');
+    const free = el('div', 'free-money');
+    free.append(el('span', 't-caption', 'Свободные деньги'), el('span', 'm-value nowrap', money(START_CASH)));
+    const capitalBox = el('div', 'capital');
+    const modes = el('div', 'switch t-caption');
+    modes.append(button('is-active', 'Капитал'), button('', 'Прибыль'));
+    capitalBox.append(modes, el('span', 'm-metric nowrap', money(START_CASH)));
+    card.append(free, capitalBox);
+
+    const savings = el('div', 'instrument');
+    const rate = el('div');
+    rate.append(el('span', 't-caption flat', 'Ставка'), el('div', 'm-metric', '12,0% годовых'));
+    const result = el('div', 'savings-result nowrap');
+    result.append(el('span', 'm-body', '34 620 ₽'), el('span', 'm-body up', '+173 ₽'));
+    savings.append(rate, demoChart([8, 9, 8.5, 10, 9.8, 11, 10.5, 12, 12.6, 11.8, 13.2], true), result, demoActions('Снять', 'Пополнить'));
+    const category = demoCategory('Накопительный счёт', savings);
+    category.classList.add('intro-savings');
+
+    const column = el('div', 'intro__column');
+    column.append(card, el('p', 't-heading', caption), category);
+    stage.append(column);
+    return [stage];
+  },
+
+  invest({ funds, stocks }) {
+    const stage = introStage();
+    const fundsCard = demoCategory('ПИФы', ...withSeparators(funds.map(demoInstrument)));
+    fundsCard.classList.add('intro-funds');
+    const stocksCard = demoCategory('Акции', ...withSeparators(stocks.map(demoInstrument)));
+    stocksCard.classList.add('intro-stocks');
+    stage.append(fundsCard, stocksCard);
+    return [stage];
+  },
+
+  lesson({ lesson: key, caption }) {
+    const lesson = lessons[key];
+    const stage = introStage();
+
+    const card = el('article', 'learn raised');
+    const titleRow = el('div', 'learn__title-row');
+    titleRow.append(el('h2', 'learn__title', lesson.title), el('span', `risk t-label risk--${lesson.risk}`, riskNames[lesson.risk]));
+    const heading = el('div');
+    heading.append(titleRow, el('p', 'learn__subtitle', lesson.subtitle));
+    const tabs = el('div', 'switch t-caption');
+    for (const [tabKey, label] of lessonTabs[lesson.tabs]) tabs.append(button(tabKey === key ? 'is-active' : '', label));
+    const head = el('div', 'learn__head');
+    head.append(heading, tabs);
+    const body = el('div', 'learn__body');
+    body.append(lessonColumns(lesson));
+    const footer = el('div', 'learn__footer');
+    const close = el('button', 'btn-accent t-label', 'К торгам');
+    footer.append(el('span', 't-caption', 'Обучение'), close);
+    card.append(head, body, footer);
+
+    const preview = el('div', 'intro-lesson');
+    preview.append(card);
+    const hint = el('p', 'intro-hint');
+    hint.append(el('span', 'help m-control intro__help', '?'), el('span', '', caption));
+    const column = el('div', 'intro__column');
+    column.append(preview, hint);
+    stage.append(column);
+    return [stage];
+  },
+
+  news({ news, event }) {
+    const newsStage = introStage('intro__stage--news');
+    const list = el('div', 'news');
+    list.append(el('h2', 't-heading', 'Новости'));
+    for (const [order, title, text] of news) {
+      const article = el('article', 'news__item');
+      article.append(el('span', 'm-caption', order), el('h3', 't-label', title), el('p', '', text));
+      list.append(article);
+    }
+    newsStage.append(list);
+
+    const eventStage = introStage();
+    const card = el('div', 'life-event raised');
+    card.append(
+      el('span', 't-label up', event.type),
+      el('span', 'life-event__icon', event.icon),
+      el('h2', 't-heading', event.title),
+      el('span', 'life-event__amount up', event.amount),
+      el('p', 'life-event__text', event.text),
+      el('button', 'btn-confirm t-label', event.button)
+    );
+    eventStage.append(card);
+    return [newsStage, eventStage];
+  },
+
+  results({ summary, results, leaders, leadersTotal }) {
+    const preview = el('div', 'intro-results');
+    preview.inert = true;
+
+    const item = (label, value, className, small = true) => {
+      const box = el('div', `summary__item${small ? ' summary__item--small' : ''}`);
+      box.append(el('span', small ? 'summary__small' : '', label), el('span', className, value));
+      return box;
+    };
+    const card = el('div', 'summary');
+    const primary = el('div', 'summary__primary');
+    const rank = item('Твоё место в рейтинге', summary.rank, 'm-value summary__accent');
+    rank.append(el('span', 'summary__small summary__faded', summary.total));
+    primary.append(
+      item('Итоговый портфель', summary.capital, 'summary__capital', false),
+      item('Заработано на инвестициях', summary.profit, 'summary__profit up', false),
+      rank
+    );
+    const sources = el('div', 'summary__sources');
+    sources.append(
+      item('Авансы и зарплаты за игру', summary.wages, 'm-metric'),
+      item('Жизненные ситуации', summary.events, 'm-metric down'),
+      item('Доходность рынка: индекс Московской биржи', summary.market, 'm-metric summary__accent')
+    );
+    card.append(primary, el('div', 'summary__rule'), sources);
+
+    const columns = el('div', 'results');
+    const gains = el('div', 'results__column');
+    const losses = el('div', 'results__column');
+    columns.append(gains, el('span', 'vsep'), losses);
+    renderResultColumns(gains, losses, results.map(([short, score]) => ({ short, score })), (v) => money(v, true));
+
+    const board = el('div', 'leaderboard');
+    const heading = el('div', 'leaderboard__heading');
+    heading.append(el('h2', 't-heading', 'Итоговый рейтинг'), el('span', 'm-caption entry__muted', `${leadersTotal} участников`));
+    board.append(heading, el('p', 'summary__small entry__muted', 'По итоговому капиталу · Нажми на строку, чтобы изучить результат участника'));
+    const table = el('div', 'leaderboard__table');
+    table.append(leaderboardColumns(), ...leaders.map((player) => leaderRow(player, false)));
+    board.append(table);
+
+    preview.append(card, columns, board);
+    return [el('span', 'vsep intro__rule'), preview];
+  }
+};
+
+function leaderboardColumns() {
+  const columns = el('div', 'leader__grid leader__columns t-caption entry__muted');
+  columns.append(el('span', '', 'Место'), el('span', '', 'Игрок'), el('span', 'leader__number', 'Итоговый капитал'), el('span', 'leader__number', 'Заработано на инвестициях'), el('span'));
+  return columns;
+}
+
 // ===== Запуск =====
 
 function renderAll() {
@@ -1117,6 +1548,7 @@ function renderAll() {
 // После окончания игры — новая партия с выбора режима (имя уже известно)
 async function restart() {
   closeLessonSilently();
+  closeIntro();
   if (isMulti()) leaveMultiplayer();
   else await storage.deleteGame(GAME_ID);
   ui.savingsForm = null;
@@ -1159,6 +1591,8 @@ function showEntry(page) {
     const input = $('name-input');
     input.value = playerName();
     $('name-submit').disabled = !input.value.trim();
+    // По приглашению возвращаться некуда: после имени игрок сразу попадает в лобби
+    $('name-back').hidden = Boolean(room.inviteCode);
     requestAnimationFrame(() => input.focus());
   }
   if (page === 'solo') renderTemplates();
@@ -1169,6 +1603,22 @@ function showEntry(page) {
 function hideEntry() {
   document.body.classList.remove('is-entry');
   setPaused('entry', false);
+}
+
+// Спрашивает, продолжать ли сохранённую партию; ответ — true/false
+function askResume(name, text) {
+  $('resume-title').textContent = `Восстановить игру под ником «${name}»?`;
+  $('resume-text').textContent = text;
+  showEntry('resume');
+  return new Promise((resolve) => {
+    const answer = (value) => () => {
+      $('resume-yes').onclick = null;
+      $('resume-no').onclick = null;
+      resolve(value);
+    };
+    $('resume-yes').onclick = answer(true);
+    $('resume-no').onclick = answer(false);
+  });
 }
 
 function renderTemplates() {
@@ -1193,6 +1643,7 @@ async function startNewGame() {
   }
   hideEntry();
   renderAll();
+  if (game.introPending) openIntro();
 }
 
 // ===== Соединение с сервером =====
@@ -1231,7 +1682,14 @@ function randomToken() {
 
 function setConnecting(isConnecting) {
   $('create-room').disabled = isConnecting;
+  $('name-submit').disabled = isConnecting || !$('name-input').value.trim();
   renderMultiPage(isConnecting);
+}
+
+function forgetInvite() {
+  if (!room.inviteCode) return;
+  room.inviteCode = null;
+  history.replaceState(null, '', location.pathname);
 }
 
 function closeConnection() {
@@ -1326,6 +1784,8 @@ async function handleServerMessage(message) {
     await enterMultiGame(message);
   } else if (message.type === 'tick') {
     applyTick(message);
+  } else if (message.type === 'intro') {
+    applyIntro(message);
   } else if (message.type === 'paused') {
     applyPaused(message);
   } else if (message.type === 'error') {
@@ -1349,6 +1809,8 @@ async function handleServerError({ message, fatal }) {
   } else if (wasPlaying) {
     await restart();
   } else {
+    // По этому приглашению войти нельзя: дальше обычный экран мультиплеера с кодом в поле
+    forgetInvite();
     showEntry('multi');
   }
 }
@@ -1357,10 +1819,7 @@ function roomEntered(code) {
   room.code = code;
   saveRoom();
   setConnecting(false);
-  if (room.inviteCode) {
-    room.inviteCode = null;
-    history.replaceState(null, '', location.pathname);
-  }
+  forgetInvite();
   settleResume(true);
 }
 
@@ -1375,7 +1834,7 @@ function enterLobby({ code, template, selfId, hostId, players }) {
 }
 
 async function enterMultiGame(snapshot) {
-  const { code, year, template, dayMs, day, name, tickers, titles, portfolio, history, cards, paused, finished, rank, playersTotal, isHost } = snapshot;
+  const { code, year, template, dayMs, day, name, tickers, titles, portfolio, history, cards, paused, finished, rank, playersTotal, isHost, intro, selfId, leaderboard } = snapshot;
   if (!prices || prices.year !== String(year)) prices = await LocalPrices.create(String(year));
   engine.prices = prices;
   lobby = null;
@@ -1395,7 +1854,9 @@ async function enterMultiGame(snapshot) {
     finished: false,
     rank,
     playersTotal,
-    isHost
+    isHost,
+    selfId,
+    leaderboard
   };
   LOCAL_PAUSES.forEach((reason) => setPaused(reason, false));
   updateCardAvailability();
@@ -1404,10 +1865,14 @@ async function enterMultiGame(snapshot) {
   setPaused('server', paused);
   renderAll();
   if (finished) finishMultiGame();
+  else applyIntro(intro);
 }
 
-function applyTick({ day, portfolio, history, notices, events, rank, playersTotal, finished }) {
+function applyTick({ day, portfolio, history, notices, events, rank, playersTotal, finished, selfId, leaderboard }) {
   if (!isMulti() || game.finished) return;
+  closeIntro();
+  game.selfId = selfId;
+  game.leaderboard = leaderboard;
   game.date = new Date(game.year, 8, 1 + day);
   game.portfolio = portfolio;
   game.history.push(...history);
@@ -1440,6 +1905,7 @@ function applyPaused({ paused, isHost }) {
 
 function finishMultiGame() {
   closeLessonSilently();
+  closeIntro();
   $('modal').hidden = true;
   onModalConfirm = null;
   ui.eventQueue = [];
@@ -1459,7 +1925,8 @@ function renderRating() {
   if (!isMulti()) return;
   $('rating-value').textContent = `#${game.rank} / ${game.playersTotal}`;
   const pause = $('host-pause');
-  pause.hidden = !game.isHost;
+  // До первого дня ставить на паузу нечего
+  pause.hidden = !game.isHost || Boolean(ui.intro);
   pause.textContent = ui.pause.has('server') ? 'Продолжить' : 'Пауза';
 }
 
@@ -1616,7 +2083,8 @@ function bindEntry() {
     } catch (error) {
       console.warn('Не удалось сохранить имя игрока:', error);
     }
-    showEntry(room.inviteCode ? 'multi' : 'mode');
+    if (room.inviteCode) joinRoom();
+    else showEntry('mode');
   });
 
   $('templates').addEventListener('click', (event) => {
@@ -1654,6 +2122,7 @@ function bindStaticControls() {
   $('learn-close').addEventListener('click', closeLesson);
   $('modal-confirm').addEventListener('click', closeModal);
   $('final-restart').addEventListener('click', () => void restart());
+  $('final').addEventListener('scroll', updateCompactSummary, { passive: true });
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !$('learn').hidden) closeLesson();
@@ -1662,7 +2131,7 @@ function bindStaticControls() {
   document.addEventListener('visibilitychange', () => setPaused('hidden', document.hidden));
 }
 
-// Ссылка-приглашение: код уже подставлен, остаётся нажать «Присоединиться»
+// Ссылка-приглашение: код уже подставлен, игрок называет имя и сразу входит в лобби
 function readInvite() {
   const code = new URLSearchParams(location.search).get('room')?.trim().toUpperCase();
   if (code?.length !== ROOM_CODE_LENGTH) return;
@@ -1676,11 +2145,16 @@ async function init() {
   readInvite();
   const saved = savedRoom();
   if (saved && (!room.inviteCode || saved.code === room.inviteCode)) {
-    if (await resumeRoom(saved)) return;
-    room.code = null;
+    const resume = await askResume(playerName() || 'Игрок', `Ты в комнате ${saved.code}. Если отказаться, ты выйдешь из неё. В уже начатую партию вернуться будет нельзя.`);
+    if (resume) {
+      if (await resumeRoom(saved)) return;
+      room.code = null;
+    } else {
+      forgetRoom();
+    }
   }
   if (room.inviteCode) {
-    showEntry(playerName() ? 'multi' : 'start');
+    showEntry('name');
     return;
   }
 
@@ -1695,8 +2169,18 @@ async function init() {
     return;
   }
 
+  const resume = await askResume(game.player || 'Игрок', 'Если отказаться, сохранение будет удалено.');
+  if (!resume) {
+    await storage.deleteGame(GAME_ID);
+    game = null;
+    showEntry('start');
+    return;
+  }
+
+  hideEntry();
   renderAll();
   if (game.finished) finishGame();
+  else if (game.introPending) openIntro();
   else if (game.pendingEvent) showLifeEvent(game.pendingEvent);
 }
 
@@ -1713,6 +2197,8 @@ function finishNow() {
   }
   if (game.finished) return;
   closeLessonSilently();
+  closeIntro();
+  game.introPending = false;
   $('modal').hidden = true;
   onModalConfirm = null;
   setPaused('modal', false);
