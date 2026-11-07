@@ -7,7 +7,7 @@
 
 Раскладка data/raw:
     <диапазон>/<группа>/[подгруппа/]XLSX/<файл>.xlsx
-    MCFTR/XLSX/MCFTR_<диапазон>.xlsx
+Индексы лежат в группе «Индекс»; в игру идёт только MCFTR, остальные (IMOEX) пропускаются.
 Парные CSV не читаются: в них нет заливки ячеек, которой в облигациях отмечены дефолты.
 """
 import csv
@@ -28,7 +28,8 @@ OUTPUT = ROOT / 'prices' / 'data.json'
 TICKERS = ROOT / 'prices' / 'tickers.csv'
 
 RANGE = re.compile(r'\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}')
-INDEX_FOLDER = 'MCFTR'
+INDEX_GROUP = 'Индекс'
+INDEX_TICKER = 'MCFTR'
 
 # Заливка столбца coupon_payment_rub: дефолты; остальные цвета — обычные выплаты
 TECHNICAL_DEFAULT = 'F4B183'
@@ -41,7 +42,13 @@ REDEMPTIONS = {
     ('2022-08-01_2023-08-31', 'RU000A103WX4'): '2023-05-26',  # Гарант-Инвест-002P-04
 }
 
-# Столбец цены по названию группы. В MCFTR только close: open за 2020–2021 местами равен 0
+# Убраны из игры: файлы в выгрузке есть, но не читаются (выкуп и делистинг Детского мира не реализованы)
+EXCLUDED = {
+    ('2023-08-01_2024-08-31', 'DSKY'),
+    ('2024-08-01_2025-08-31', 'DSKY'),
+}
+
+# Столбец цены по названию группы
 PRICE_COLUMN = {
     'Акции': 'close',
     'Фьючи аналог': 'close',
@@ -49,7 +56,7 @@ PRICE_COLUMN = {
     'Фонды': 'unit_price',
     'Валюта': 'usd_rub_rate',
     'Ставка': 'bank_deposit_rate_pct',
-    INDEX_FOLDER: 'close',
+    INDEX_GROUP: 'close',
 }
 # Цена до первых торгов может быть пустой только у этих групп
 LATE_START = {'Облигации', 'Фонды'}
@@ -182,11 +189,10 @@ def collect():
             if group not in PRICE_COLUMN:
                 fail(where, f'неизвестная группа «{group}»')
                 continue
-            add(folder.name, ticker_of(path.stem), read_instrument(path, group, folder.name, where), where)
-
-    for path in sorted((RAW / INDEX_FOLDER).rglob('*.xlsx')):
-        range_name = path.stem.split('_', 1)[1]
-        add(range_name, INDEX_FOLDER, read_instrument(path, INDEX_FOLDER, range_name, path.name), path.name)
+            ticker = ticker_of(path.stem)
+            if (folder.name, ticker) in EXCLUDED or group == INDEX_GROUP and ticker != INDEX_TICKER:
+                continue
+            add(folder.name, ticker, read_instrument(path, group, folder.name, where), where)
     return data
 
 
@@ -216,9 +222,9 @@ def compare_with_tickers(data):
     for range_name, instruments in data.items():
         year = range_name[:4]
         listed = {row['Тикер']: row for row in by_year[year]}
-        if INDEX_FOLDER not in instruments:
-            fail(range_name, 'нет индекса MCFTR')
-        for ticker in sorted(set(instruments) - set(listed) - {INDEX_FOLDER}):
+        if INDEX_TICKER not in instruments:
+            fail(range_name, f'нет индекса {INDEX_TICKER}')
+        for ticker in sorted(set(instruments) - set(listed) - {INDEX_TICKER}):
             fail(range_name, f'{ticker} есть в файлах, но нет в tickers.csv')
         for ticker, row in listed.items():
             if ticker in instruments:
